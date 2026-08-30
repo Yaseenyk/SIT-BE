@@ -1,0 +1,57 @@
+# Render blueprint — https://render.com/docs/blueprint-spec
+#
+# Deploys the API and a managed Postgres. Point Render at this repo, choose
+# "New > Blueprint", and set the three secrets marked sync:false below.
+#
+# The FRONTEND is NOT here: it lives in a separate repository
+# (https://github.com/Yaseenyk/SIT-FE) and is served as a static export by GitHub
+# Pages. Set CORS_ALLOWED_ORIGINS below to that site's origin.
+
+databases:
+  - name: sit-be-db
+    databaseName: aisa
+    user: aisa
+    # Free Postgres on Render expires after 30 days and must be recreated. For a
+    # site that has to survive a semester, move this to the paid tier or to
+    # Supabase/Neon and set DATABASE_URL by hand.
+    plan: free
+
+services:
+  - type: web
+    name: sit-be
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    plan: free
+    region: singapore          # Nearest region to Kolhapur that Render offers.
+    healthCheckPath: /actuator/health
+    envVars:
+      # Render's connection string is postgres://…, which JDBC does not accept.
+      # fromDatabase gives the raw value; convert it to jdbc:postgresql://… in the
+      # dashboard, or set the three DATABASE_* vars separately. See docs/deployment.md.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: sit-be-db
+          property: connectionString
+
+      # Generated once by Render and then held. Rotating it in the dashboard
+      # invalidates every issued admin token, which is the revocation mechanism.
+      - key: JWT_SECRET
+        generateValue: true
+
+      - key: CORS_ALLOWED_ORIGINS
+        sync: false            # e.g. https://<github-user>.github.io
+
+      - key: CLOUDINARY_CLOUD_NAME
+        sync: false
+      - key: CLOUDINARY_API_KEY
+        sync: false
+      - key: CLOUDINARY_API_SECRET
+        sync: false
+
+      # Set once to create the first admin, then clear it and redeploy.
+      - key: ADMIN_BOOTSTRAP_PASSWORD
+        sync: false
+
+      - key: SPRING_PROFILES_ACTIVE
+        value: prod

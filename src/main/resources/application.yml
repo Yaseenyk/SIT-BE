@@ -1,0 +1,122 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# AISA API — base configuration.
+#
+# Every secret and every environment-specific value is read from the environment
+# (and, locally, from `be/.env` via spring-dotenv). Nothing sensitive is committed.
+# See `be/.env.example` for the full list and `docs/deployment.md` for how they are
+# set on Render.
+# ─────────────────────────────────────────────────────────────────────────────
+spring:
+  application:
+    name: aisa-api
+
+  datasource:
+    # Render hands you a single connection string; locally docker-compose supplies one.
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/aisa}
+    username: ${DATABASE_USERNAME:aisa}
+    password: ${DATABASE_PASSWORD:aisa}
+    hikari:
+      # Free-tier Postgres allows very few connections. A pool larger than the server's
+      # limit does not make the app faster — it makes it fail under the first burst.
+      maximum-pool-size: ${DB_POOL_SIZE:5}
+      connection-timeout: 20000
+
+  jpa:
+    hibernate:
+      # Flyway owns the schema. Hibernate is only allowed to check that the entities
+      # still match it, and to fail loudly at boot when they do not.
+      ddl-auto: validate
+    open-in-view: false          # No lazy loading in the view layer; DTOs are built in services.
+    properties:
+      hibernate:
+        jdbc:
+          time_zone: UTC
+          batch_size: 25
+        order_inserts: true
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
+
+  servlet:
+    multipart:
+      # Images are uploaded straight to Cloudinary from the browser using a signature
+      # this API mints, so multipart here is only a safety ceiling.
+      max-file-size: 8MB
+      max-request-size: 8MB
+
+  jackson:
+    default-property-inclusion: non_null
+    serialization:
+      write-dates-as-timestamps: false
+
+server:
+  port: ${PORT:8080}             # Render injects PORT; do not hardcode it.
+  error:
+    include-message: never       # Error bodies come from GlobalExceptionHandler, not the servlet container.
+    include-stacktrace: never
+  compression:
+    enabled: true
+  forward-headers-strategy: framework   # Behind Render's proxy, so honour X-Forwarded-*.
+
+aisa:
+  cors:
+    # The GitHub Pages origin, plus localhost for development. Comma-separated.
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
+  jwt:
+    # Base64 of at least 32 random bytes. There is deliberately no default: booting
+    # with a shipped signing key would mean anyone with this repo can mint admin tokens.
+    secret: ${JWT_SECRET}
+    issuer: ${JWT_ISSUER:aisa-api}
+    access-token-ttl: ${JWT_ACCESS_TTL:PT12H}
+  admin:
+    # Used once, by V2__seed_admin.sql's companion bootstrapper, to create the first
+    # admin if the table is empty. Change the password from the dashboard afterwards.
+    bootstrap-username: ${ADMIN_BOOTSTRAP_USERNAME:AISA2026}
+    bootstrap-password: ${ADMIN_BOOTSTRAP_PASSWORD:}
+    # Failed logins per username before a temporary lockout — the server-side version
+    # of the captcha the old single-file site enforced only in the browser.
+    max-failed-attempts: ${ADMIN_MAX_FAILED_ATTEMPTS:5}
+    lockout-duration: ${ADMIN_LOCKOUT_DURATION:PT15M}
+  cloudinary:
+    cloud-name: ${CLOUDINARY_CLOUD_NAME:}
+    api-key: ${CLOUDINARY_API_KEY:}
+    api-secret: ${CLOUDINARY_API_SECRET:}
+    upload-folder: ${CLOUDINARY_FOLDER:aisa}
+  contact:
+    # Contact-form submissions per IP per hour. The old form had a honeypot and nothing
+    # else, so a single script could fill the messages collection.
+    rate-limit-per-hour: ${CONTACT_RATE_LIMIT:5}
+
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+
+springdoc:
+  swagger-ui:
+    path: /docs
+    operationsSorter: method
+
+logging:
+  level:
+    org.aisa.api: ${LOG_LEVEL:INFO}
+
+---
+spring:
+  config:
+    activate:
+      on-profile: dev
+  jpa:
+    show-sql: true
+logging:
+  level:
+    org.aisa.api: DEBUG
+    org.hibernate.SQL: DEBUG

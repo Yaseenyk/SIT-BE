@@ -1,0 +1,21 @@
+# Test profile. The datasource comes from Testcontainers via @ServiceConnection,
+# so only the things that must not be inherited from the real environment are set.
+spring:
+  jpa:
+    show-sql: false
+aisa:
+  cors:
+    allowed-origins: http://localhost:3000
+  admin:
+    bootstrap-username: AISA2026
+    max-failed-attempts: 5
+    lockout-duration: PT15M
+  cloudinary:
+    # Left unconfigured on purpose: MediaService must degrade to 503 on the upload
+    # endpoint without breaking any of the content endpoints around it.
+    cloud-name: ""
+  contact:
+    rate-limit-per-hour: 5
+logging:
+  level:
+    org.aisa.api: INFO

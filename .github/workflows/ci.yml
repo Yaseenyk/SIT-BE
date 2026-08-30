@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          # Must match <java.version> in pom.xml and the Dockerfile's base images.
+          java-version: "25"
+          distribution: temurin
+          cache: maven
+
+      # Testcontainers starts a real Postgres. ubuntu-latest runners have Docker
+      # available, so nothing needs installing — but the tests DO need it, which is why
+      # this job cannot run on a container-less runner.
+      - name: Test
+        run: mvn -B verify
+        env:
+          # The application refuses to start without a signing key, by design. This one is
+          # for CI only and grants nothing: it never leaves the runner.
+          JWT_SECRET: Y2ktb25seS1zaWduaW5nLWtleS1hdC1sZWFzdC0zMi1ieXRlcy1sb25n
+
+      - name: Upload test reports
+        # Reports matter most when the run failed, so this must not be skipped on failure.
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: target/surefire-reports/
+          if-no-files-found: ignore
+
+  docker:
+    # Only proves the image still builds. Deployment is Render's job: it watches this
+    # repository and builds the Dockerfile itself (see render.yaml).
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build image
+        run: docker build -t sit-be:ci .

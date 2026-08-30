@@ -1,0 +1,57 @@
+# Local development.
+#
+#   docker compose up -d db     # Postgres only; run the app from your IDE
+#   docker compose up           # the whole stack, as it runs in production
+#
+# Production uses a managed Postgres, so this file is not the deployment
+# descriptor — render.yaml is.
+
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: aisa
+      POSTGRES_USER: aisa
+      POSTGRES_PASSWORD: aisa
+    ports:
+      # Published so the app can also be run straight from an IDE against it.
+      - "5432:5432"
+    volumes:
+      - aisa-db:/var/lib/postgresql/data
+    healthcheck:
+      # The API's Flyway migration runs at startup and fails outright if Postgres
+      # is not accepting connections yet, so the app must wait for this, not just
+      # for the container to exist.
+      test: ["CMD-SHELL", "pg_isready -U aisa -d aisa"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      # 'db' is the compose service name, resolved on the compose network.
+      DATABASE_URL: jdbc:postgresql://db:5432/aisa
+      DATABASE_USERNAME: aisa
+      DATABASE_PASSWORD: aisa
+      SPRING_PROFILES_ACTIVE: dev
+      # 3001 as well as 3000: `next dev` silently falls back to the next free port when
+      # something else already holds 3000, and the resulting CORS failure looks like the
+      # API being down rather than like a port clash.
+      CORS_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3001
+      # Development-only key. Production reads JWT_SECRET from the host's secrets.
+      JWT_SECRET: ZGV2ZWxvcG1lbnQtb25seS1rZXktbm90LWZvci1wcm9kdWN0aW9uLXVzZQ==
+      ADMIN_BOOTSTRAP_USERNAME: AISA2026
+      ADMIN_BOOTSTRAP_PASSWORD: change-me-locally
+      # Image uploads stay unconfigured locally; everything else works without them.
+      CLOUDINARY_CLOUD_NAME: ${CLOUDINARY_CLOUD_NAME:-}
+      CLOUDINARY_API_KEY: ${CLOUDINARY_API_KEY:-}
+      CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET:-}
+    ports:
+      - "8080:8080"
+
+volumes:
+  aisa-db:
