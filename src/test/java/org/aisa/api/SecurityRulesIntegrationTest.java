@@ -107,10 +107,88 @@ class SecurityRulesIntegrationTest extends FirestoreIntegrationTest {
         assertThat(adminView.getBody()).contains(secret);
     }
 
+    // ── The account endpoints ────────────────────────────────────────────────────
+
+    /**
+     * The rule that would be catastrophic to get wrong.
+     *
+     * <p>Signup is a public form. If it could ever produce an admin, anyone on the
+     * internet could take the site over by filling it in, and nothing would look wrong
+     * afterwards — there would simply be an extra admin.
+     */
+    @Test
+    void signingUpCannotProduceAnAdmin() {
+        HttpHeaders headers = studentAuth();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        // A fresh student, registering. The body carries no role field at all, but assert
+        // on the OUTCOME rather than on the absence of the field: a future DTO that added
+        // one must fail this test, not quietly start honouring it.
+        ResponseEntity<String> response = rest.exchange(
+                "/api/v1/auth/me", HttpMethod.GET, new HttpEntity<>(headers), String.class);
+
+        assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(response.getBody()).contains("\"role\":\"STUDENT\"");
+    }
+
+    /** A student holds a perfectly valid token, and still may not write to the site. */
+    @Test
+    void studentsCannotReachAdminEndpoints() {
+        HttpHeaders headers = studentAuth();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+
+        for (String path : new String[]{
+                "/api/v1/messages", "/api/v1/settings/admin", "/api/v1/stats/admin",
+                "/api/v1/admin/users", "/api/v1/applications"}) {
+            assertThat(rest.exchange(path, HttpMethod.GET,
+                            new HttpEntity<>(new HttpHeaders(headers)), String.class)
+                    .getStatusCode())
+                    .as("GET %s must be admin-only, and a student token is not enough", path)
+                    .isEqualTo(HttpStatus.FORBIDDEN);
+        }
+
+        assertThat(rest.exchange("/api/v1/committees", HttpMethod.POST,
+                        new HttpEntity<>(Map.of("id", "x", "name", "X", "type", "functional"), headers),
+                        String.class)
+                .getStatusCode())
+                .as("a student must not be able to create a committee")
+                .isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    /** A student MAY act on their own behalf. The mirror of the test above. */
+    @Test
+    void studentsCanReachTheirOwnEndpoints() {
+        HttpHeaders headers = studentAuth();
+        for (String path : new String[]{"/api/v1/me/registrations", "/api/v1/me/applications"}) {
+            assertThat(rest.exchange(path, HttpMethod.GET,
+                            new HttpEntity<>(new HttpHeaders(headers)), String.class)
+                    .getStatusCode())
+                    .as("GET %s is the caller's own data", path)
+                    .isEqualTo(HttpStatus.OK);
+        }
+    }
+
+    @Test
+    void theAccountEndpointsRejectAnonymousCallers() {
+        for (String path : new String[]{
+                "/api/v1/auth/me", "/api/v1/me/registrations", "/api/v1/me/applications",
+                "/api/v1/admin/users"}) {
+            assertThat(rest.getForEntity(path, String.class).getStatusCode())
+                    .as("GET %s must not be readable without a token", path)
+                    .isEqualTo(HttpStatus.UNAUTHORIZED);
+        }
+    }
+
+    /** A made-up token must not authenticate anyone. */
+    @Test
+    void aForgedTokenIsRejected() {
+        assertThat(rest.exchange("/api/v1/auth/me", HttpMethod.GET,
+                        new HttpEntity<>(bearer("not.a.real.token")), String.class)
+                .getStatusCode())
+                .isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
     private String signIn() {
-        @SuppressWarnings("unchecked")
-        Map<String, Object> body = rest.postForObject("/api/v1/auth/login",
-                Map.of("username", "AISA2026", "password", "test-admin-password"), Map.class);
-        return (String) body.get("token");
+        return idTokenFor(ADMIN_EMAIL);
     }
 }

@@ -45,21 +45,18 @@ aisa:
   cors:
     # The GitHub Pages origin, plus localhost for development. Comma-separated.
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
-  jwt:
-    # Base64 of at least 32 random bytes. There is deliberately no default: booting
-    # with a shipped signing key would mean anyone with this repo can mint admin tokens.
-    secret: ${JWT_SECRET}
-    issuer: ${JWT_ISSUER:aisa-api}
-    access-token-ttl: ${JWT_ACCESS_TTL:PT12H}
+  auth:
+    # Who may hold an account. The signup form is public, so without this the account
+    # list fills with whatever the internet sends it. Comma-separated; an EMPTY value
+    # means no restriction, which is a decision to make deliberately.
+    allowed-email-domains: ${AUTH_ALLOWED_EMAIL_DOMAINS:bsiet.org}
   admin:
-    # Used once, by V2__seed_admin.sql's companion bootstrapper, to create the first
-    # admin if the table is empty. Change the password from the dashboard afterwards.
-    bootstrap-username: ${ADMIN_BOOTSTRAP_USERNAME:AISA2026}
-    bootstrap-password: ${ADMIN_BOOTSTRAP_PASSWORD:}
-    # Failed logins per username before a temporary lockout — the server-side version
-    # of the captcha the old single-file site enforced only in the browser.
-    max-failed-attempts: ${ADMIN_MAX_FAILED_ATTEMPTS:5}
-    lockout-duration: ${ADMIN_LOCKOUT_DURATION:PT15M}
+    # Used once, at boot, to create the first admin if none exists. Signing up can only
+    # ever produce a student, so this is the only way to get the first one. Clear
+    # ADMIN_PASSWORD once the account exists.
+    bootstrap-email: ${ADMIN_EMAIL:}
+    bootstrap-password: ${ADMIN_PASSWORD:}
+    bootstrap-name: ${ADMIN_NAME:AISA Admin}
   cloudinary:
     cloud-name: ${CLOUDINARY_CLOUD_NAME:}
     api-key: ${CLOUDINARY_API_KEY:}
@@ -69,6 +66,9 @@ aisa:
     # Contact-form submissions per IP per hour. The old form had a honeypot and nothing
     # else, so a single script could fill the messages collection.
     rate-limit-per-hour: ${CONTACT_RATE_LIMIT:5}
+    # Salt for the hashed caller IP. Defaults to the service-account JSON so there is no
+    # extra secret to set; override only if you want them rotated independently.
+    hash-salt: ${CONTACT_HASH_SALT:${FIREBASE_SERVICE_ACCOUNT:}}
 
 management:
   endpoints:

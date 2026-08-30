@@ -36,9 +36,19 @@ public class ContactMessageService {
         this.messages = messages;
         this.clock = clock;
         this.rateLimitPerHour = properties.contact().rateLimitPerHour();
-        // Reuses the JWT secret purely as salt material. It never leaves the server, and
-        // it means there is no second secret to configure and forget.
-        this.hashSalt = properties.jwt().secret().getBytes(StandardCharsets.UTF_8);
+        /*
+         * The IP is stored hashed, so a message document never holds a raw address. That
+         * only helps if the salt is secret: there are only 2^32 IPv4 addresses, so an
+         * unsalted hash is reversible by anyone who can read the collection.
+         */
+        String salt = properties.contact().hashSalt();
+        if (salt == null || salt.isBlank()) {
+            log.warn("No CONTACT_HASH_SALT and no FIREBASE_SERVICE_ACCOUNT: contact-form IP "
+                    + "hashes are unsalted and therefore reversible. Fine for local development, "
+                    + "not for a deployment.");
+            salt = "aisa-development-only";
+        }
+        this.hashSalt = salt.getBytes(StandardCharsets.UTF_8);
     }
 
     public record ContactRequest(

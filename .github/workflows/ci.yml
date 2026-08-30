@@ -39,12 +39,11 @@ jobs:
       # set. There is therefore no Firebase service account in CI, and nothing here can
       # write to production data.
       - name: Test
-        run: firebase emulators:exec --only firestore --project aisa-local "mvn -B verify"
+        run: firebase emulators:exec --only firestore,auth --project aisa-local "mvn -B verify"
         env:
           FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
           # The application refuses to start without a signing key, by design. This one is
           # for CI only and grants nothing: it never leaves the runner.
-          JWT_SECRET: Y2ktb25seS1zaWduaW5nLWtleS1hdC1sZWFzdC0zMi1ieXRlcy1sb25n
 
       - name: Upload test reports
         # Reports matter most when the run failed, so this must not be skipped on failure.
@@ -77,11 +76,11 @@ jobs:
 
       # Port 8085, not 8080: the container publishes the API on 8080, and having the
       # emulator claim the same port would fail the smoke test for the wrong reason.
-      - name: Start the Firestore emulator
+      - name: Start the Firestore and Auth emulators
         run: |
           npm install -g firebase-tools
-          firebase emulators:start --only firestore --project aisa-local \
-            --config <(echo '{"emulators":{"firestore":{"host":"127.0.0.1","port":8085},"ui":{"enabled":false}}}') &
+          firebase emulators:start --only firestore,auth --project aisa-local \
+            --config <(echo '{"emulators":{"firestore":{"host":"127.0.0.1","port":8085},"auth":{"host":"127.0.0.1","port":9099},"ui":{"enabled":false}}}') &
           for _ in $(seq 1 40); do
             curl -fsS http://127.0.0.1:8085/ >/dev/null 2>&1 && break
             sleep 3
@@ -89,12 +88,13 @@ jobs:
 
       - name: Run the container and wait for it to serve
         run: |
-          # No Firebase credentials in CI: FIRESTORE_EMULATOR_HOST makes FirestoreConfig
-          # skip credentials entirely, so nothing here can reach the real project.
+          # No Firebase credentials in CI. Both emulator variables make the app skip
+          # credentials entirely, so nothing can reach the real project. The auth one is read
+          # by the Admin SDK itself from the environment, so it is passed to the container.
           docker run -d --name sit-be-smoke --network host \
             -e FIRESTORE_EMULATOR_HOST=127.0.0.1:8085 \
+            -e FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099 \
             -e FIREBASE_PROJECT_ID=aisa-local \
-            -e JWT_SECRET=Y2ktb25seS1zaWduaW5nLWtleS1hdC1sZWFzdC0zMi1ieXRlcy1sb25n \
             -e CORS_ALLOWED_ORIGINS=http://localhost:3000 \
             sit-be:ci
 

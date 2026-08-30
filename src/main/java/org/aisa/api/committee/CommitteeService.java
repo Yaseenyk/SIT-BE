@@ -6,6 +6,7 @@ import org.aisa.api.committee.CommitteeDtos.CommitteeRequest;
 import org.aisa.api.committee.CommitteeDtos.CommitteeResponse;
 import org.aisa.api.common.ConflictException;
 import org.aisa.api.common.NotFoundException;
+import org.aisa.api.application.CommitteeApplicationRepository;
 import org.aisa.api.media.MediaService;
 import org.aisa.api.member.MemberRepository;
 import org.slf4j.Logger;
@@ -19,12 +20,17 @@ public class CommitteeService {
 
     private final CommitteeRepository committees;
     private final MemberRepository members;
+    private final CommitteeApplicationRepository applications;
     private final MediaService media;
 
     public CommitteeService(
-            CommitteeRepository committees, MemberRepository members, MediaService media) {
+            CommitteeRepository committees,
+            MemberRepository members,
+            CommitteeApplicationRepository applications,
+            MediaService media) {
         this.committees = committees;
         this.members = members;
+        this.applications = applications;
         this.media = media;
     }
 
@@ -94,10 +100,16 @@ public class CommitteeService {
         // coordinator photos are released here.
         media.deleteQuietly(committee.getCoordinatorPhotoId());
         media.deleteQuietly(committee.getCoordinator2PhotoId());
+
+        // Applications are deleted, not unassigned: a member without a committee is still
+        // a person on the roster, but an application to a committee that no longer exists
+        // is nothing anyone can act on.
+        int withdrawn = applications.deleteByCommittee(id);
         committees.deleteById(id);
 
-        if (unassigned > 0) {
-            log.info("Deleted committee '{}' and unassigned {} member(s).", id, unassigned);
+        if (unassigned > 0 || withdrawn > 0) {
+            log.info("Deleted committee '{}', unassigned {} member(s), removed {} application(s).",
+                    id, unassigned, withdrawn);
         }
     }
 

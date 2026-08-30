@@ -8,12 +8,18 @@ import org.aisa.api.common.NotFoundException;
 import org.aisa.api.event.EventDtos.EventRequest;
 import org.aisa.api.event.EventDtos.EventResponse;
 import org.aisa.api.media.MediaService;
+import org.aisa.api.registration.EventRegistrationRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 @Service
 public class EventService {
 
+    private static final Logger log = LoggerFactory.getLogger(EventService.class);
+
     private final EventRepository events;
+    private final EventRegistrationRepository registrations;
     private final MediaService media;
     /**
      * Injected rather than calling {@code LocalDate.now()} inline, so a test can decide
@@ -23,8 +29,13 @@ public class EventService {
      */
     private final Clock clock;
 
-    public EventService(EventRepository events, MediaService media, Clock clock) {
+    public EventService(
+            EventRepository events,
+            EventRegistrationRepository registrations,
+            MediaService media,
+            Clock clock) {
         this.events = events;
+        this.registrations = registrations;
         this.media = media;
         this.clock = clock;
     }
@@ -66,7 +77,16 @@ public class EventService {
     public void delete(UUID id) {
         Event event = require(id);
         media.deleteQuietly(event.getBannerPublicId());
+
+        // Firestore has no cascade, so this IS the cascade. Registrations are deleted
+        // BEFORE the event, so a failure part-way leaves rows pointing at an event that
+        // still exists rather than orphans nothing can resolve.
+        int cancelled = registrations.deleteByEvent(id);
         events.deleteById(id);
+
+        if (cancelled > 0) {
+            log.info("Deleted event {} and {} registration(s).", id, cancelled);
+        }
     }
 
     private Event require(UUID id) {
