@@ -39,11 +39,7 @@ jobs:
       # set. There is therefore no Firebase service account in CI, and nothing here can
       # write to production data.
       - name: Test
-        run: |
-          firebase emulators:exec \
-            --only firestore \
-            --project aisa-local \
-            "mvn -B verify"
+        run: firebase emulators:exec --only firestore --project aisa-local "mvn -B verify"
         env:
           FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
           # The application refuses to start without a signing key, by design. This one is
@@ -60,11 +56,64 @@ jobs:
           if-no-files-found: ignore
 
   docker:
-    # Only proves the image still builds. Deployment is Render's job: it watches this
-    # repository and builds the Dockerfile itself (see render.yaml).
+    # Builds the image AND runs it.
+    #
+    # Building alone was not enough. A runtime image based on Alpine built perfectly and
+    # then died with SIGSEGV on boot, because gRPC's netty-tcnative is linked against
+    # glibc while Alpine ships musl. The crash is in native code, so there is no Java
+    # exception and no application log — the only evidence is exit status 139. It reached
+    # production precisely because this job stopped at `docker build`.
     needs: test
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
       - name: Build image
         run: docker build -t sit-be:ci .
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      # Port 8085, not 8080: the container publishes the API on 8080, and having the
+      # emulator claim the same port would fail the smoke test for the wrong reason.
+      - name: Start the Firestore emulator
+        run: |
+          npm install -g firebase-tools
+          firebase emulators:start --only firestore --project aisa-local \
+            --config <(echo '{"emulators":{"firestore":{"host":"127.0.0.1","port":8085},"ui":{"enabled":false}}}') &
+          for _ in $(seq 1 40); do
+            curl -fsS http://127.0.0.1:8085/ >/dev/null 2>&1 && break
+            sleep 3
+          done
+
+      - name: Run the container and wait for it to serve
+        run: |
+          # No Firebase credentials in CI: FIRESTORE_EMULATOR_HOST makes FirestoreConfig
+          # skip credentials entirely, so nothing here can reach the real project.
+          docker run -d --name sit-be-smoke --network host \
+            -e FIRESTORE_EMULATOR_HOST=127.0.0.1:8085 \
+            -e FIREBASE_PROJECT_ID=aisa-local \
+            -e JWT_SECRET=Y2ktb25seS1zaWduaW5nLWtleS1hdC1sZWFzdC0zMi1ieXRlcy1sb25n \
+            -e CORS_ALLOWED_ORIGINS=http://localhost:3000 \
+            sit-be:ci
+
+          for _ in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:8080/actuator/health >/dev/null 2>&1; then
+              echo "Container is serving. Seeded content:"
+              curl -fsS http://127.0.0.1:8080/api/v1/stats
+              exit 0
+            fi
+            if [ -z "$(docker ps -q -f name=sit-be-smoke)" ]; then
+              STATUS=$(docker inspect sit-be-smoke --format '{{.State.ExitCode}}')
+              echo "::error title=Container died on startup::Exit status ${STATUS}. 139 is a native SIGSEGV, which usually means a musl/glibc mismatch in a bundled native library."
+              exit 1
+            fi
+            sleep 3
+          done
+          echo "::error title=No response::The container never answered the health probe."
+          exit 1
+
+      - name: Container logs
+        if: always()
+        run: docker logs sit-be-smoke 2>&1 | tail -40 || true

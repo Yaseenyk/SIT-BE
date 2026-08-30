@@ -16,12 +16,24 @@ COPY src ./src
 RUN mvn -B -DskipTests package
 
 
-FROM eclipse-temurin:25-jre-alpine AS runtime
+#
+# NOT Alpine. This must stay a glibc image.
+#
+# The runtime was eclipse-temurin:25-jre-alpine, and the JVM died with SIGSEGV inside
+# netty_internal_tcnative_SSLContext_JNI_OnLoad before serving a single request. gRPC
+# talks to Firestore over TLS using netty-tcnative, whose bundled native library is
+# linked against glibc; Alpine ships musl, so loading it segfaults the process.
+#
+# The crash is in native code, so it is not an exception and nothing in the application
+# can catch or report it — the only symptom is "Exited with status 139".
+#
+FROM eclipse-temurin:25-jre AS runtime
 WORKDIR /app
 
 # Non-root. A container that runs as root gives an RCE the run of the filesystem;
 # this application never needs to write anywhere outside /tmp.
-RUN addgroup -S aisa && adduser -S aisa -G aisa
+# Debian's adduser rather than Alpine's busybox one.
+RUN groupadd --system aisa && useradd --system --gid aisa --no-create-home aisa
 USER aisa
 
 COPY --from=build --chown=aisa:aisa /build/target/aisa-api-*.jar app.jar
