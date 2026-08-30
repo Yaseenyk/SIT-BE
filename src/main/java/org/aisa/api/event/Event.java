@@ -69,14 +69,32 @@ public class Event extends BaseEntity {
      * bootcamp stays under "Upcoming" while it is actually running.
      */
     public boolean isPast(LocalDate today) {
-        LocalDate lastDay = endsOn != null ? endsOn : startsOn;
-        return lastDay.isBefore(today);
+        LocalDate lastDay = lastDay();
+        /*
+         * A document with no start date at all should not take the endpoint down.
+         *
+         * The schema used to forbid this (starts_on was NOT NULL); Firestore forbids
+         * nothing, so a document written by anything other than this API — the original
+         * site, or a hand edit in the console — can arrive without one. Treating it as past
+         * keeps it off the front page while leaving it visible and fixable in the admin
+         * list, which is far better than a 500 on every visitor.
+         */
+        return lastDay != null && lastDay.isBefore(today);
+    }
+
+    /** The last day the event runs: its end date, or its start date if it is one day. */
+    public LocalDate lastDay() {
+        return endsOn != null ? endsOn : startsOn;
     }
 
     /** The label to render: the admin's override if there is one, otherwise generated. */
     public String displayDate() {
         if (dateLabel != null && !dateLabel.isBlank()) {
             return dateLabel;
+        }
+        if (startsOn == null) {
+            // Same reasoning as isPast: render something rather than throw.
+            return "Date to be confirmed";
         }
         if (endsOn == null || endsOn.equals(startsOn)) {
             return startsOn.format(DAY_MONTH_YEAR);

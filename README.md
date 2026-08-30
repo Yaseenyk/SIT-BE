@@ -33,9 +33,14 @@ To run against the real project instead, set `FIREBASE_PROJECT_ID` and
 - Health: <http://localhost:8080/actuator/health>
 
 On first boot against an **empty** project the seeder writes the association's committees,
-members, events and achievements. It is guarded per collection, so it never overwrites and
-never runs twice — pointing this at the original site's existing Firestore finds the
-collections already populated and writes nothing.
+members, events and achievements. It is guarded per collection, so it never overwrites and never runs twice.
+
+> **If the project already holds documents written by the ORIGINAL single-file site, they
+> are not readable as-is.** The collection *names* match but the field names do not
+> (`cat` vs `category`, `desc` vs `description`, `date` vs `startsOn`, and members
+> referenced their committee by *name*). The seeder also skips a non-empty collection, so
+> you would get neither the old content nor the new. Point this at empty collections, or
+> convert the old documents first.
 
 Sign in to the frontend's `/admin/` with the bootstrap credentials, then change the password.
 

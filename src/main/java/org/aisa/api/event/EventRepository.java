@@ -50,7 +50,7 @@ public class EventRepository {
     public List<Event> findUpcoming(LocalDate today) {
         return all().stream()
                 .filter(event -> !event.isPast(today))
-                .sorted(Comparator.comparing(Event::getStartsOn))
+                .sorted(Comparator.comparing(Event::getStartsOn, Comparator.nullsLast(Comparator.naturalOrder())))
                 .toList();
     }
 
@@ -58,13 +58,13 @@ public class EventRepository {
     public List<Event> findPast(LocalDate today) {
         return all().stream()
                 .filter(event -> event.isPast(today))
-                .sorted(Comparator.comparing(Event::getStartsOn).reversed())
+                .sorted(Comparator.comparing(Event::getStartsOn, Comparator.nullsLast(Comparator.reverseOrder())))
                 .toList();
     }
 
     public List<Event> findAllNewestFirst() {
         return all().stream()
-                .sorted(Comparator.comparing(Event::getStartsOn).reversed())
+                .sorted(Comparator.comparing(Event::getStartsOn, Comparator.nullsLast(Comparator.reverseOrder())))
                 .toList();
     }
 
@@ -142,7 +142,7 @@ public class EventRepository {
          * The derived field. Written here and nowhere else, so it is impossible to save an
          * event whose lastDay disagrees with its dates.
          */
-        map.put("lastDay", Documents.toField(e.getEndsOn() != null ? e.getEndsOn() : e.getStartsOn()));
+        map.put("lastDay", Documents.toField(e.lastDay()));
         map.put("dateLabel", e.getDateLabel());
         map.put("tag", e.getTag());
         map.put("emoji", e.getEmoji());
