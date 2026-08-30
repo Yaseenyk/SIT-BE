@@ -6,3 +6,9 @@ target/
 *.iml
 .vscode/
 .DS_Store
+
+# Firebase service-account keys. These are PRIVATE KEYS granting full read/write to the
+# database, and they are named unpredictably, so match the shape rather than one filename.
+*firebase-adminsdk*.json
+service-account*.json
+*-serviceaccount.json

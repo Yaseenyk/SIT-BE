@@ -1,7 +1,12 @@
 package org.aisa.api.firestore;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import java.io.IOException;
+import java.io.InputStream;
 import java.time.Clock;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.List;
 import org.aisa.api.achievement.Achievement;
 import org.aisa.api.achievement.AchievementRepository;
@@ -18,6 +23,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.boot.ApplicationRunner;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.io.ClassPathResource;
 
 /**
  * Seeds the association's structure the first time it runs against an empty project.
@@ -30,20 +36,31 @@ import org.springframework.context.annotation.Configuration;
  * <ul>
  *   <li>It is idempotent. Restarting the service seeds nothing a second time.
  *   <li>It never overwrites. An admin who edits or deletes seeded content keeps their
- *       version; deleting <em>every</em> committee would let them be reseeded, which is a
- *       reasonable reading of an empty collection and the only way back from a mistake.
- *   <li>It is safe against the existing Firebase project. Pointing this at the original
- *       site's Firestore finds the collections already populated and writes nothing.
+ *       version; emptying a collection entirely lets it be reseeded, which is a reasonable
+ *       reading of an empty collection and the only way back from a mistake.
  * </ul>
  *
  * <p>Unlike the original page, which seeded from the browser — so whichever visitor loaded
  * it first decided what everyone else saw — this runs once, on the server, before the first
  * request is served.
+ *
+ * <h2>Where the content comes from</h2>
+ *
+ * The committees, members and site settings live in {@code resources/seed/aisa-seed.json},
+ * not in this file. That file was generated from the association's own Firestore, so the
+ * committee structure, the responsibilities, the faculty coordinators, the real
+ * office-bearers and the real contact details are theirs rather than invented — with the
+ * legacy field names normalised and the duplicate roster entries collapsed.
+ *
+ * <p>Keeping it as a resource rather than Java literals means an admin can read and edit
+ * it, and that adding a committee does not mean recompiling. Events and achievements stay
+ * in code because they are dated relative to "today".
  */
 @Configuration
 public class FirestoreSeeder {
 
     private static final Logger log = LoggerFactory.getLogger(FirestoreSeeder.class);
+    private static final String SEED_FILE = "seed/aisa-seed.json";
 
     @Bean
     ApplicationRunner seedFirestore(
@@ -54,175 +71,145 @@ public class FirestoreSeeder {
             SiteSettingsRepository settings,
             Clock clock) {
         return args -> {
+            /*
+             * The first Firestore call the application ever makes lands here, so this is
+             * where a misconfiguration surfaces. Left alone it surfaces as
+             * "Firestore call failed while reading committees" plus a gRPC stack trace,
+             * which names none of the three things that are ever actually wrong — and on a
+             * host like Render it presents as a crash loop rather than a message.
+             *
+             * Failing fast is still right: a backend that cannot reach its database is not
+             * healthy and should not accept traffic. It just has to say why.
+             */
+            try {
+                committees.count();
+            } catch (RuntimeException ex) {
+                throw new IllegalStateException("""
+                        Cannot reach Firestore. The usual causes, in order of likelihood:
+                          1. The database has not been created yet — Firebase Console ->
+                             Build -> Firestore Database -> Create database (Native mode).
+                          2. FIREBASE_SERVICE_ACCOUNT is missing, truncated, or is the
+                             base64 of a different project's key.
+                          3. FIREBASE_PROJECT_ID names a project the key has no access to.
+                        See the cause below for what the client actually reported.""", ex);
+            }
+
+            JsonNode seed = readSeedFile();
+
             if (committees.count() == 0) {
-                seedCommittees(committees);
-                log.info("Seeded 10 committees.");
+                int n = seedCommittees(committees, seed.get("committees"));
+                log.info("Seeded {} committees.", n);
             }
             if (members.count() == 0) {
-                seedMembers(members);
-                log.info("Seeded office-bearers.");
+                int n = seedMembers(members, seed.get("members"));
+                log.info("Seeded {} office-bearers.", n);
             }
             if (events.count() == 0) {
-                seedEvents(events, LocalDate.now(clock));
-                log.info("Seeded events.");
+                int n = seedEvents(events, LocalDate.now(clock));
+                log.info("Seeded {} events.", n);
             }
             if (achievements.count() == 0) {
-                seedAchievements(achievements, LocalDate.now(clock));
-                log.info("Seeded achievements.");
+                int n = seedAchievements(achievements, LocalDate.now(clock));
+                log.info("Seeded {} achievements.", n);
             }
             if (settings.find().isEmpty()) {
-                settings.save(defaultSettings());
+                settings.save(toSettings(seed.get("settings")));
                 log.info("Seeded site settings.");
             }
         };
     }
 
-    private static Committee committee(
-            String id, int order, String type, String name, String icon, String gradient,
-            String size, String badge, List<String> responsibilities) {
-        Committee c = new Committee(id);
-        c.setDisplayOrder(order);
-        c.setType(type);
-        c.setName(name);
-        c.setIcon(icon);
-        c.setGradient(gradient);
-        c.setSizeLabel(size);
-        c.setBadge(badge);
-        c.setResponsibilities(responsibilities);
-        return c;
-    }
-
-    private static void seedCommittees(CommitteeRepository repo) {
-        Committee advisory = committee("advisory", 0, "advisory", "Faculty Advisory Committee", "🎓",
-                "linear-gradient(135deg,#1e40af,#3b82f6)", "2 members", "Faculty Advisory",
-                List.of("Provide academic and administrative guidance to the association",
-                        "Approve events, workshops, seminars, and competitions",
-                        "Ensure activities align with department and university policies",
-                        "Support collaboration with industry experts, researchers, and alumni",
-                        "Monitor budget usage and documentation",
-                        "Evaluate the performance and impact of association activities"));
-        advisory.setCoordLabel("Department Head");
-        advisory.setCoordinator("Prof. A.A. Paritekar");
-        advisory.setCoordinatorSub("CSE-AIML");
-        advisory.setCoord2Label("AISA Coordinator");
-        advisory.setCoordinator2("Prof. S.S. Rabade");
-        repo.save(advisory);
-
-        repo.save(committee("president", 1, "executive", "President", "👑",
-                "linear-gradient(135deg,#78350f,#d97706)", "1 student", "Executive",
-                List.of("Provide overall leadership and vision for the association",
-                        "Conduct regular meetings with committee members",
-                        "Coordinate with faculty advisors and department administration",
-                        "Represent the association in departmental meetings",
-                        "Approve project proposals, events, and initiatives",
-                        "Ensure smooth execution of all activities")));
-
-        repo.save(committee("vp", 2, "executive", "Vice President", "🤝",
-                "linear-gradient(135deg,#065f46,#059669)", "1 student", "Executive",
-                List.of("Assist the President in planning and executing activities",
-                        "Coordinate between different committees",
-                        "Supervise event planning and execution",
-                        "Take charge of the association in the absence of the President",
-                        "Monitor the progress of ongoing projects and events")));
-
-        repo.save(committee("treasurer", 3, "executive", "Treasurer", "💰",
-                "linear-gradient(135deg,#7c2d12,#c2410c)", "1 student", "Executive",
-                List.of("Prepare budget plans for events and activities",
-                        "Maintain records of income and expenditures",
-                        "Handle fund collection, sponsorship funds, and reimbursements",
-                        "Submit financial reports to faculty advisors",
-                        "Ensure transparency and proper use of funds")));
-
-        repo.save(committee("secretary", 4, "executive", "General Secretary", "📋",
-                "linear-gradient(135deg,#1e3a8a,#1d4ed8)", "1 student", "Executive",
-                List.of("Maintain records, meeting minutes, and official documents",
-                        "Prepare activity reports and event documentation",
-                        "Manage official communication with members and faculty",
-                        "Coordinate scheduling of meetings and activities",
-                        "Maintain the association membership database")));
-
-        repo.save(committee("sports", 5, "functional", "Sports Committee", "🏅",
-                "linear-gradient(135deg,#134e4a,#0f766e)", "2-3 students", "Functional",
-                List.of("Organise inter-class and inter-department sports events",
-                        "Coordinate participation in university-level sports competitions",
-                        "Promote physical wellness and team-building among AIML students",
-                        "Manage sports equipment and booking of facilities")));
-
-        repo.save(committee("events", 6, "functional", "Event Management Committee", "🎪",
-                "linear-gradient(135deg,#7f1d1d,#b91c1c)", "4-5 students", "Functional",
-                List.of("Plan technical fests, workshops, competitions, and seminars",
-                        "Prepare event schedules and logistics",
-                        "Coordinate with technical, publicity, and finance teams",
-                        "Manage venue arrangements, registrations, and certificates",
-                        "Ensure smooth event execution")));
-
-        Committee research = committee("research", 7, "functional", "Research & Innovation Committee", "🔬",
-                "linear-gradient(135deg,#4a044e,#7e22ce)", "3-4 students", "Functional",
-                List.of("Encourage research paper writing and publications",
-                        "Organize paper presentation competitions",
-                        "Help students identify research problems in AIML",
-                        "Conduct sessions on research methodology and tools",
-                        "Support patent filing and innovation projects",
-                        "Collaborate with research labs and industry"));
-        research.setCoordLabel("Faculty Mentor");
-        research.setCoordinator("Prof. A.A. Paritekar");
-        repo.save(research);
-
-        Committee technical = committee("technical", 8, "functional", "Technical Committee", "⚙️",
-                "linear-gradient(135deg,#0c4a6e,#0369a1)", "4-6 students", "Functional",
-                List.of("Organize AIML workshops, coding sessions, and hackathons",
-                        "Conduct seminars on deep learning, computer vision, NLP, etc.",
-                        "Arrange guest lectures from industry experts and researchers",
-                        "Promote student research projects and innovation",
-                        "Help students participate in AI competitions and conferences",
-                        "Maintain GitHub repositories and technical resources"));
-        technical.setCoordLabel("Faculty Mentor");
-        technical.setCoordinator("Prof. S.S. Rabade");
-        repo.save(technical);
-
-        repo.save(committee("media", 9, "functional", "Media, Design & Publicity", "📸",
-                "linear-gradient(135deg,#3b0764,#6d28d9)", "3-4 students", "Functional",
-                List.of("Design posters, banners, and promotional materials",
-                        "Manage social media accounts and association website",
-                        "Publicize upcoming events and achievements",
-                        "Document events through photos and videos",
-                        "Create newsletters and activity reports")));
-    }
-
-    /** Sample names. Fictional, and meant to be replaced from the admin panel. */
-    private static void seedMembers(MemberRepository repo) {
-        record Seed(String name, String role, String committeeId, String year, int order) {}
-        List<Seed> seeds = List.of(
-                new Seed("Aditi Kulkarni", "President", "president", "3rd Year", 0),
-                new Seed("Rohan Deshmukh", "Vice President", "vp", "3rd Year", 1),
-                new Seed("Sanika Patil", "Treasurer", "treasurer", "2nd Year", 2),
-                new Seed("Omkar Jadhav", "General Secretary", "secretary", "2nd Year", 3),
-                new Seed("Prathamesh Shinde", "Sports Coordinator", "sports", "2nd Year", 4),
-                new Seed("Sneha Bhosale", "Events Head", "events", "3rd Year", 5),
-                new Seed("Aryan Chavan", "Research Lead", "research", "3rd Year", 6),
-                new Seed("Isha Sawant", "Technical Head", "technical", "3rd Year", 7),
-                new Seed("Kaustubh Mane", "Media Head", "media", "2nd Year", 8),
-                new Seed("Tanvi Gaikwad", "Technical Member", "technical", "2nd Year", 9),
-                new Seed("Sarthak Pawar", "Technical Member", "technical", "3rd Year", 10),
-                new Seed("Neha Salunkhe", "Research Member", "research", "3rd Year", 11),
-                new Seed("Vedant Kadam", "Events Member", "events", "2nd Year", 12),
-                new Seed("Riya Naik", "Design Lead", "media", "2nd Year", 13),
-                new Seed("Atharva Joshi", "Sports Member", "sports", "1st Year", 14));
-
-        for (Seed seed : seeds) {
-            Member member = new Member(seed.name(), seed.role());
-            member.setCommitteeId(seed.committeeId());
-            member.setAcademicYear(seed.year());
-            member.setDisplayOrder(seed.order());
-            repo.save(member);
+    private static JsonNode readSeedFile() {
+        try (InputStream in = new ClassPathResource(SEED_FILE).getInputStream()) {
+            return new ObjectMapper().readTree(in);
+        } catch (IOException ex) {
+            // Packaged with the jar, so this only fails if the build is broken. Failing
+            // loudly beats starting with an empty site and no explanation.
+            throw new IllegalStateException("Could not read " + SEED_FILE + " from the classpath", ex);
         }
+    }
+
+    /** Null for an absent or JSON-null field, so blanks never become the string "null". */
+    private static String text(JsonNode node, String field) {
+        JsonNode value = node.get(field);
+        if (value == null || value.isNull()) {
+            return null;
+        }
+        String s = value.asText().trim();
+        return s.isEmpty() ? null : s;
+    }
+
+    private static int seedCommittees(CommitteeRepository repo, JsonNode array) {
+        for (JsonNode node : array) {
+            Committee c = new Committee(node.get("id").asText());
+            c.setDisplayOrder(node.get("displayOrder").asInt());
+            c.setType(text(node, "type"));
+            c.setName(text(node, "name"));
+            c.setIcon(text(node, "icon"));
+            c.setGradient(text(node, "gradient"));
+            c.setSizeLabel(text(node, "sizeLabel"));
+            c.setBadge(text(node, "badge"));
+            c.setCoordLabel(text(node, "coordLabel"));
+            c.setCoordinator(text(node, "coordinator"));
+            c.setCoordinatorSub(text(node, "coordinatorSub"));
+            c.setCoord2Label(text(node, "coord2Label"));
+            c.setCoordinator2(text(node, "coordinator2"));
+
+            List<String> responsibilities = new ArrayList<>();
+            for (JsonNode r : node.withArray("responsibilities")) {
+                responsibilities.add(r.asText());
+            }
+            c.setResponsibilities(responsibilities);
+            repo.save(c);
+        }
+        return array.size();
+    }
+
+    private static int seedMembers(MemberRepository repo, JsonNode array) {
+        for (JsonNode node : array) {
+            Member m = new Member(text(node, "name"), text(node, "role"));
+            m.setCommitteeId(text(node, "committeeId"));
+            m.setAcademicYear(text(node, "academicYear"));
+            m.setLinkedinUrl(text(node, "linkedinUrl"));
+            m.setGithubUrl(text(node, "githubUrl"));
+            m.setEmail(text(node, "email"));
+            m.setPhotoUrl(text(node, "photoUrl"));
+            m.setDisplayOrder(node.get("displayOrder").asInt());
+            repo.save(m);
+        }
+        return array.size();
+    }
+
+    private static SiteSettings toSettings(JsonNode node) {
+        SiteSettings s = new SiteSettings();
+        s.setPhone(text(node, "phone"));
+        s.setEmail(text(node, "email"));
+        s.setAddress(text(node, "address"));
+        s.setWebsite(text(node, "website"));
+        s.setLinkedin(text(node, "linkedin"));
+        s.setInstagram(text(node, "instagram"));
+        s.setNotificationEmail(text(node, "notificationEmail"));
+        s.setAboutTitle(text(node, "aboutTitle"));
+        s.setAboutDescription(text(node, "aboutDescription"));
+        s.setFeature1Title(text(node, "feature1Title"));
+        s.setFeature1Description(text(node, "feature1Description"));
+        s.setFeature2Title(text(node, "feature2Title"));
+        s.setFeature2Description(text(node, "feature2Description"));
+        s.setFeature3Title(text(node, "feature3Title"));
+        s.setFeature3Description(text(node, "feature3Description"));
+        s.setFeature4Title(text(node, "feature4Title"));
+        s.setFeature4Description(text(node, "feature4Description"));
+        return s;
     }
 
     /**
      * Dated relative to today, so the Upcoming tab is never empty on a fresh install
      * however long after this was written the project is first created.
+     *
+     * <p>In code rather than the seed file precisely because of that relative dating —
+     * a JSON file cannot express "twelve days from whenever this first runs".
      */
-    private static void seedEvents(EventRepository repo, LocalDate today) {
+    private static int seedEvents(EventRepository repo, LocalDate today) {
         record Seed(String title, int startOffset, Integer endOffset, String tag, String emoji, String description) {}
         List<Seed> seeds = List.of(
                 new Seed("Neural Networks from Scratch", 12, null, "Workshop", "🧠",
@@ -261,23 +248,26 @@ public class FirestoreSeeder {
             event.setDescription(seed.description());
             repo.save(event);
         }
+        return seeds.size();
     }
 
-    private static void seedAchievements(AchievementRepository repo, LocalDate today) {
+    /**
+     * Sample achievements, so the section is not an empty box on day one.
+     *
+     * <p>These names are the association's real office-bearers, but the achievements
+     * themselves are placeholders — replace them from the admin panel with real ones.
+     */
+    private static int seedAchievements(AchievementRepository repo, LocalDate today) {
         record Seed(String title, String student, String category, int daysAgo, String description) {}
         List<Seed> seeds = List.of(
-                new Seed("Winner - Smart India Hackathon (Regional)", "Isha Sawant", "competition", 45,
+                new Seed("Winner - Smart India Hackathon (Regional)", "Shreyash Gote", "competition", 45,
                         "Led a four-member team to first place with a crop-disease detector running entirely on-device."),
-                new Seed("Paper accepted at ICACCI 2026", "Aryan Chavan", "research", 72,
+                new Seed("Paper accepted at ICACCI 2026", "Chinmay Deshpande", "research", 72,
                         "Co-authored \"Lightweight Transformers for Regional Language OCR\", accepted in the student track."),
-                new Seed("Machine Learning Intern, Persistent Systems", "Rohan Deshmukh", "internship", 110,
+                new Seed("Machine Learning Intern, Persistent Systems", "Srushti Halluri", "internship", 110,
                         "Six-month internship on the recommendation platform team, converted to a pre-placement offer."),
-                new Seed("Runner-up - Kavach National Cybersecurity Hackathon", "Sarthak Pawar", "competition", 150,
-                        "Second nationally for an anomaly-detection pipeline built over 48 hours."),
-                new Seed("Best Paper - State Level Technical Symposium", "Neha Salunkhe", "research", 190,
-                        "Recognised for work on federated learning across low-bandwidth rural clinics."),
-                new Seed("Data Science Intern, Tata Consultancy Services", "Tanvi Gaikwad", "internship", 220,
-                        "Built forecasting models for retail demand planning during a summer internship."));
+                new Seed("Best Paper - State Level Technical Symposium", "Pradnya Magdum", "research", 190,
+                        "Recognised for work on federated learning across low-bandwidth rural clinics."));
 
         for (Seed seed : seeds) {
             Achievement achievement = new Achievement(seed.title(), seed.student());
@@ -286,29 +276,6 @@ public class FirestoreSeeder {
             achievement.setDescription(seed.description());
             repo.save(achievement);
         }
-    }
-
-    private static SiteSettings defaultSettings() {
-        SiteSettings s = new SiteSettings();
-        s.setPhone("0231 265 8613");
-        s.setEmail("aiml@bsiet.edu.in");
-        s.setAddress("Dr. Bapuji Salunkhe Institute of Engineering & Technology, Kolhapur, Maharashtra");
-        s.setWebsite("https://bsiet.edu.in");
-        s.setAboutTitle("About AISA");
-        s.setAboutDescription(
-                "AISA is the student body of the Department of Computer Science & Engineering (AI & ML) "
-                        + "at Dr. Bapuji Salunkhe Institute of Engineering & Technology, Kolhapur. We run the "
-                        + "workshops, hackathons and reading groups that turn a syllabus into something you can "
-                        + "build with - and we make sure every student who wants to get their hands on this work "
-                        + "has somewhere to start.");
-        s.setFeature1Title("Learn");
-        s.setFeature1Description("Workshops, bootcamps and hands-on sessions across the AIML stack.");
-        s.setFeature2Title("Build");
-        s.setFeature2Description("Hackathons and project teams that turn coursework into something that runs.");
-        s.setFeature3Title("Research");
-        s.setFeature3Description("Paper writing, presentation practice, and guidance towards publication.");
-        s.setFeature4Title("Connect");
-        s.setFeature4Description("Guest lectures, alumni talks, and industry collaboration.");
-        return s;
+        return seeds.size();
     }
 }
