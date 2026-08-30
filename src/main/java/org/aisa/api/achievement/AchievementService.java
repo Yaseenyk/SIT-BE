@@ -8,7 +8,6 @@ import java.util.UUID;
 import org.aisa.api.common.NotFoundException;
 import org.aisa.api.media.MediaService;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class AchievementService {
@@ -39,22 +38,19 @@ public class AchievementService {
             String photoUrl,
             String photoPublicId) {}
 
-    @Transactional(readOnly = true)
     public List<AchievementResponse> findAll(String category) {
         List<Achievement> found = (category == null || category.isBlank() || "all".equalsIgnoreCase(category))
                 ? achievements.findAllNewestFirst()
-                : achievements.findByCategoryNewestFirst(category);
+                : achievements.findByCategory(category);
         return found.stream().map(AchievementService::toResponse).toList();
     }
 
-    @Transactional
     public AchievementResponse create(AchievementRequest request) {
         Achievement achievement = new Achievement(request.title().trim(), request.student().trim());
         apply(achievement, request);
         return toResponse(achievements.save(achievement));
     }
 
-    @Transactional
     public AchievementResponse update(UUID id, AchievementRequest request) {
         Achievement achievement = require(id);
         if (achievement.getPhotoPublicId() != null
@@ -67,11 +63,10 @@ public class AchievementService {
         return toResponse(achievements.save(achievement));
     }
 
-    @Transactional
     public void delete(UUID id) {
         Achievement achievement = require(id);
         media.deleteQuietly(achievement.getPhotoPublicId());
-        achievements.delete(achievement);
+        achievements.deleteById(id);
     }
 
     private Achievement require(UUID id) {

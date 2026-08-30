@@ -14,6 +14,7 @@ How the single-file site became two deployables, and what changed on the way.
 | Styling | ~700 lines of CSS driven by `:root` custom properties |
 | Behaviour | ~2,480 lines: Three.js hero, 2D neuron canvas, admin CRUD, browser-side image compression, arithmetic captcha |
 | Backend | Firebase **compat** SDK, called straight from the browser — Firestore (7 collections), Auth, Storage |
+| Key | The Firebase API key was literal in the markup, at line 1564 |
 
 The Firebase config, including the API key, was literal in the file at line 1564.
 
@@ -23,13 +24,13 @@ The Firebase config, including the API key, was literal in the file at line 1564
                      GitHub Pages                         Render
         ┌──────────────────────────────┐      ┌───────────────────────────┐
         │  fe/  Next.js static export  │      │  be/  Spring Boot (Docker)│
-        │  HTML + JS + CSS, no server  │─────▶│  REST API, JWT, Flyway    │
+        │  HTML + JS + CSS, no server  │─────▶│  REST API, JWT, Firestore │
         └──────────────────────────────┘ HTTPS└─────────────┬─────────────┘
                         │                                   │
                         │ signed direct upload              │
                         ▼                                   ▼
                   ┌───────────┐                     ┌───────────────┐
-                  │Cloudinary │                     │  PostgreSQL   │
+                  │Cloudinary │                     │   Firestore   │
                   └───────────┘                     └───────────────┘
 ```
 
@@ -39,40 +40,66 @@ changes without a rebuild, so it is fetched **in the browser** at runtime — th
 the original had when it called Firestore from the page. What changed is that a server now
 decides who may write.
 
-## 3. Collections → tables
+## 3. The data model
 
-| Firestore | Table | What changed |
-| --------- | ----- | ------------ |
-| `committees` | `committee` + `committee_responsibility` | Responsibilities are ordered rows, not a JSON array |
-| `members` | `member` | `committee_id` is a real **foreign key** |
-| `events` | `event` | Real `DATE`; upcoming/past is **derived**, not stored |
-| `gallery` | `gallery_item` | Album grouping kept (`album_id`) |
-| `achievements` | `achievement` | — |
-| `messages` | `contact_message` | Sender IP stored **hashed**, for rate limiting only |
-| `settings/site` + `settings/announcement` | `site_settings` | One row, one request |
-| Firebase Auth + `settings/admin` | `admin_user` | Username no longer publicly readable |
+Firestore is still the database — the **same project the original site used**, with the
+same collection names, so its existing documents are read without migration. What changed
+is who talks to it: the browser held the credentials and wrote directly; now only this
+service does.
 
-### The three changes worth knowing
+| Collection | Document id | Notes |
+| ---------- | ----------- | ----- |
+| `committees` | the slug (`technical`) | Also the `#committee-x` anchor the public site links to. Immutable |
+| `members` | UUID | `committeeId` references a committee **by id** |
+| `events` | UUID | Dates as ISO strings, plus a derived `lastDay` |
+| `gallery` | UUID | `albumId` groups a multi-upload into one tile |
+| `achievements` | UUID | — |
+| `messages` | UUID | Sender IP stored **hashed**, for rate limiting only |
+| `settings` | `site` | One document; the announcement lives in it |
+| `adminUsers` | UUID | BCrypt hash + lockout counters |
 
-**1. Members belong to committees by key.**
-Firestore stored the committee's display *name* on each member and matched on that string.
-Renaming a committee silently orphaned every member on it, with no error anywhere. The FK
-is `ON DELETE SET NULL`, not `CASCADE`: deleting a committee must not delete the students
-on it. They surface as "Unassigned" in the dashboard.
+### What Firestore does not do, and what replaced it
 
-**2. Event dates are dates.**
-The original stored `'Oct 10–12, 2024'` as a string in one of two hardcoded arrays, and
-ran `autoSortEvents()` on every page load to move items between them by parsing that prose.
-The split therefore depended on somebody opening the page, and a differently-formatted date
-stayed in the wrong list forever. Now: `starts_on DATE`, optional `ends_on`, and
-`status` computed per request against `Asia/Kolkata`. `date_label` preserves a
-human-written string (and the imported ones) for display only.
+Moving off Postgres meant losing three guarantees that were one line of SQL each. None of
+them were dropped; each is now explicit code, and each has a test.
 
-**3. Settings are one row.**
-Two documents meant two round trips on every page load for data the public site always
-needs together. The announcement's expiry is now applied **server-side** — the original
-compared it against the visitor's own clock, so a device with the wrong date kept showing
-an announcement that had ended weeks earlier.
+**1. `coalesce(ends_on, starts_on) >= today` → a derived `lastDay` field.**
+Firestore cannot compare two fields to each other. The naive fix is a stored `status` kept
+current by a nightly job — which is exactly the original site's `autoSortEvents()` bug
+rebuilt, a value correct only as often as something remembers to update it. Instead
+`lastDay` is computed and written **on every save**, from data in the same document, so it
+cannot drift. Dates are ISO strings because their lexicographic order is their
+chronological order.
+
+**2. `ON DELETE SET NULL` → an explicit batched unassign.**
+`CommitteeService.delete` clears `committeeId` on every affected member **first**, then
+deletes the committee. The ordering is the guarantee: the two writes are not atomic with
+each other, and failing after the unassign leaves consistent data, whereas failing after
+the delete leaves members referencing a document that is gone. And members reference a
+committee by its immutable **id**, never its name — the original site matched on display
+name, so a rename orphaned everyone.
+
+**3. `order by … nulls last` and `group by` → sorting in memory.**
+Firestore's `orderBy` **omits documents that lack the field entirely**, so an achievement
+saved without a date would vanish from the site rather than sort last. Member counts have
+no `GROUP BY` at all. These collections hold tens of documents, so both are computed in
+Java: index-free, and incapable of losing a record.
+
+`ReferentialIntegrityTest` covers all of this. It is the most important test here after the
+security rules, because the failure it guards against throws nothing and displays nothing.
+
+### What was genuinely gained
+
+Responsibilities are an array on the committee document, so the ordered child table and its
+composite key are gone. And there is no schema to migrate, no connection string, no pool,
+and nothing that expires after 30 days.
+
+### What was genuinely lost
+
+Transactions. `@Transactional` did nothing here and was removed. A single document write is
+atomic; multi-document writes use a `WriteBatch`; **anything spanning collections or
+Cloudinary is not atomic at all**, and ordering is the only thing making the failure modes
+survivable.
 
 ## 4. Authorisation
 
@@ -176,8 +203,17 @@ Admin saves a member with a new photo
   and cost the free hosting.
 - **The free API tier sleeps** and takes ~50 s to wake. `ApiError` says so by name on
   timeout rather than showing a generic failure.
-- **Render's free Postgres expires after 30 days.** For a site that must survive a
-  semester, move to a paid tier, Supabase, or Neon. See `deployment.md`.
-- **The token is in `localStorage`**, readable by any script on the origin. The accepted
+- **Firestore's free tier is generous but finite** — 50k document reads a day. Every page
+  load costs roughly one read per collection it renders, so a normal semester stays far
+  inside it. Firebase **Storage**, unlike Firestore, requires the Blaze plan for projects
+  created after 30 Oct 2024; this project uses Cloudinary for images and does not need it.
+- **Nothing here expires.** The Postgres this replaced was on a Render free tier that is
+  deleted after 30 days, which was the practical reason for the move.
+- **No cross-collection atomicity.** Deleting a committee writes to `members`, then
+`committees`, then Cloudinary. A failure between them leaves members already unassigned —
+visible and repairable — rather than orphaned. That ordering is deliberate; see
+`CommitteeService.delete`.
+
+**The token is in `localStorage`**, readable by any script on the origin. The accepted
   trade for a static site with no server to set an HttpOnly cookie; mitigated by the
   12-hour expiry and secret rotation.

@@ -67,7 +67,7 @@ public class StatsController {
     @GetMapping("/admin")
     @Operation(summary = "Counters including the unread-message count")
     public AdminStats adminStats() {
-        return new AdminStats(counts(), messages.countByReadFalse());
+        return new AdminStats(counts(), messages.countUnread());
     }
 
     private PublicStats counts() {

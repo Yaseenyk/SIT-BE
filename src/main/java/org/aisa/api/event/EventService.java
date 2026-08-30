@@ -9,7 +9,6 @@ import org.aisa.api.event.EventDtos.EventRequest;
 import org.aisa.api.event.EventDtos.EventResponse;
 import org.aisa.api.media.MediaService;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class EventService {
@@ -30,23 +29,20 @@ public class EventService {
         this.clock = clock;
     }
 
-    @Transactional(readOnly = true)
     public List<EventResponse> findAll(String status) {
         LocalDate today = LocalDate.now(clock);
         List<Event> found = switch (status == null ? "" : status.toLowerCase()) {
             case "upcoming" -> events.findUpcoming(today);
             case "past" -> events.findPast(today);
-            default -> events.findAllByOrderByStartsOnDesc();
+            default -> events.findAllNewestFirst();
         };
         return found.stream().map(e -> toResponse(e, today)).toList();
     }
 
-    @Transactional(readOnly = true)
     public EventResponse findById(UUID id) {
         return toResponse(require(id), LocalDate.now(clock));
     }
 
-    @Transactional
     public EventResponse create(EventRequest request) {
         validateDates(request);
         Event event = new Event(request.title().trim(), request.startsOn());
@@ -54,7 +50,6 @@ public class EventService {
         return toResponse(events.save(event), LocalDate.now(clock));
     }
 
-    @Transactional
     public EventResponse update(UUID id, EventRequest request) {
         validateDates(request);
         Event event = require(id);
@@ -68,11 +63,10 @@ public class EventService {
         return toResponse(events.save(event), LocalDate.now(clock));
     }
 
-    @Transactional
     public void delete(UUID id) {
         Event event = require(id);
         media.deleteQuietly(event.getBannerPublicId());
-        events.delete(event);
+        events.deleteById(id);
     }
 
     private Event require(UUID id) {

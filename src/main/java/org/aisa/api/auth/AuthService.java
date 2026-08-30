@@ -19,7 +19,6 @@ import org.springframework.security.authentication.BadCredentialsException;
 import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class AuthService {
@@ -42,7 +41,6 @@ public class AuthService {
         this.config = properties.admin();
     }
 
-    @Transactional
     public LoginResponse login(LoginRequest request) {
         Instant now = Instant.now();
         AdminUser admin = admins.findByUsernameIgnoreCase(request.username().trim())
@@ -77,13 +75,11 @@ public class AuthService {
                 admin.getUsername());
     }
 
-    @Transactional(readOnly = true)
     public MeResponse me() {
         AdminUser admin = requireCurrentAdmin();
         return new MeResponse(admin.getUsername(), admin.getLastLoginAt());
     }
 
-    @Transactional
     public void changePassword(ChangePasswordRequest request) {
         AdminUser admin = requireCurrentAdmin();
         if (!passwordEncoder.matches(request.currentPassword(), admin.getPasswordHash())) {
@@ -99,7 +95,6 @@ public class AuthService {
      * A token left behind on a shared lab machine should not be enough to change the
      * login name and lock the real admin out.
      */
-    @Transactional
     public LoginResponse changeUsername(ChangeUsernameRequest request) {
         AdminUser admin = requireCurrentAdmin();
         if (!passwordEncoder.matches(request.currentPassword(), admin.getPasswordHash())) {

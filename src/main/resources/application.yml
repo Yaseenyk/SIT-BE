@@ -1,43 +1,16 @@
 # ─────────────────────────────────────────────────────────────────────────────
 # AISA API — base configuration.
 #
+# Data lives in Firestore, so there is no datasource, no JPA and no Flyway here.
 # Every secret and every environment-specific value is read from the environment
-# (and, locally, from `be/.env` via spring-dotenv). Nothing sensitive is committed.
-# See `be/.env.example` for the full list and `docs/deployment.md` for how they are
+# (and, locally, from `.env` via spring-dotenv). Nothing sensitive is committed.
+# See `.env.example` for the full list and `docs/deployment.md` for how they are
 # set on Render.
 # ─────────────────────────────────────────────────────────────────────────────
 spring:
   application:
     name: aisa-api
 
-  datasource:
-    # Render hands you a single connection string; locally docker-compose supplies one.
-    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/aisa}
-    username: ${DATABASE_USERNAME:aisa}
-    password: ${DATABASE_PASSWORD:aisa}
-    hikari:
-      # Free-tier Postgres allows very few connections. A pool larger than the server's
-      # limit does not make the app faster — it makes it fail under the first burst.
-      maximum-pool-size: ${DB_POOL_SIZE:5}
-      connection-timeout: 20000
-
-  jpa:
-    hibernate:
-      # Flyway owns the schema. Hibernate is only allowed to check that the entities
-      # still match it, and to fail loudly at boot when they do not.
-      ddl-auto: validate
-    open-in-view: false          # No lazy loading in the view layer; DTOs are built in services.
-    properties:
-      hibernate:
-        jdbc:
-          time_zone: UTC
-          batch_size: 25
-        order_inserts: true
-
-  flyway:
-    enabled: true
-    locations: classpath:db/migration
-    baseline-on-migrate: true
 
   servlet:
     multipart:
@@ -61,6 +34,14 @@ server:
   forward-headers-strategy: framework   # Behind Render's proxy, so honour X-Forwarded-*.
 
 aisa:
+  firebase:
+    # The Firebase project holding the Firestore data. The same project the original
+    # single-file site used, so its existing collections are read without migration.
+    project-id: ${FIREBASE_PROJECT_ID:}
+    # The service-account JSON, raw or base64-encoded. A PRIVATE KEY — never commit it.
+    # Base64 is the practical form: the raw JSON contains newlines that most hosting
+    # dashboards mangle in a single-line environment-variable field.
+    service-account: ${FIREBASE_SERVICE_ACCOUNT:}
   cors:
     # The GitHub Pages origin, plus localhost for development. Comma-separated.
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
@@ -114,9 +95,6 @@ spring:
   config:
     activate:
       on-profile: dev
-  jpa:
-    show-sql: true
 logging:
   level:
     org.aisa.api: DEBUG
-    org.hibernate.SQL: DEBUG

@@ -1,20 +1,14 @@
 # Render blueprint — https://render.com/docs/blueprint-spec
 #
-# Deploys the API and a managed Postgres. Point Render at this repo, choose
-# "New > Blueprint", and set the three secrets marked sync:false below.
+# Deploys the API only. There is NO database service here: the data lives in
+# Firestore, which Google hosts, so Render runs just the Java process.
+#
+# Point Render at this repo, choose "New > Blueprint", and set the values marked
+# sync:false below.
 #
 # The FRONTEND is NOT here: it lives in a separate repository
 # (https://github.com/Yaseenyk/SIT-FE) and is served as a static export by GitHub
 # Pages. Set CORS_ALLOWED_ORIGINS below to that site's origin.
-
-databases:
-  - name: sit-be-db
-    databaseName: aisa
-    user: aisa
-    # Free Postgres on Render expires after 30 days and must be recreated. For a
-    # site that has to survive a semester, move this to the paid tier or to
-    # Supabase/Neon and set DATABASE_URL by hand.
-    plan: free
 
 services:
   - type: web
@@ -26,13 +20,16 @@ services:
     region: singapore          # Nearest region to Kolhapur that Render offers.
     healthCheckPath: /actuator/health
     envVars:
-      # Render's connection string is postgres://user:pass@host/db. The application
-      # converts that to JDBC form on startup (see DatabaseUrl), so it can be wired
-      # straight through with no manual step.
-      - key: DATABASE_URL
-        fromDatabase:
-          name: sit-be-db
-          property: connectionString
+      # Firebase Console -> Project settings -> General.
+      - key: FIREBASE_PROJECT_ID
+        sync: false
+
+      # Project settings -> Service accounts -> "Generate new private key".
+      # Paste the JSON BASE64-ENCODED: the raw form contains a PEM key full of
+      # newlines that this dashboard mangles, producing an "invalid key" error
+      # that names nothing useful.
+      - key: FIREBASE_SERVICE_ACCOUNT
+        sync: false
 
       # Generated once by Render and then held. Rotating it in the dashboard
       # invalidates every issued admin token, which is the revocation mechanism.

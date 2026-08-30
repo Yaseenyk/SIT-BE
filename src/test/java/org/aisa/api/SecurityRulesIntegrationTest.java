@@ -20,7 +20,7 @@ import org.springframework.http.ResponseEntity;
  * ({@code SecurityConfig}), and the failure mode of getting them wrong is not an exception
  * anyone would notice — it is a write endpoint that quietly works for anonymous callers.
  */
-class SecurityRulesIntegrationTest extends AbstractIntegrationTest {
+class SecurityRulesIntegrationTest extends FirestoreIntegrationTest {
 
     @Autowired
     private TestRestTemplate rest;

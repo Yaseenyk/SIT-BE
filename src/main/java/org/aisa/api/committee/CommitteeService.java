@@ -8,11 +8,14 @@ import org.aisa.api.common.ConflictException;
 import org.aisa.api.common.NotFoundException;
 import org.aisa.api.media.MediaService;
 import org.aisa.api.member.MemberRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class CommitteeService {
+
+    private static final Logger log = LoggerFactory.getLogger(CommitteeService.class);
 
     private final CommitteeRepository committees;
     private final MemberRepository members;
@@ -25,11 +28,10 @@ public class CommitteeService {
         this.media = media;
     }
 
-    @Transactional(readOnly = true)
     public List<CommitteeResponse> findAll(String type) {
         List<Committee> found = (type == null || type.isBlank() || "all".equalsIgnoreCase(type))
-                ? committees.findAllByOrderByDisplayOrderAsc()
-                : committees.findByTypeOrderByDisplayOrderAsc(type);
+                ? committees.findAllOrdered()
+                : committees.findByType(type);
 
         /*
          * One grouped count for the whole page rather than a count per committee. The
@@ -40,13 +42,11 @@ public class CommitteeService {
         return found.stream().map(c -> toResponse(c, memberCounts)).toList();
     }
 
-    @Transactional(readOnly = true)
     public CommitteeResponse findById(String id) {
         Committee committee = require(id);
         return toResponse(committee, members.countGroupedByCommittee());
     }
 
-    @Transactional
     public CommitteeResponse create(CommitteeRequest request) {
         if (committees.existsById(request.id())) {
             throw new ConflictException("A committee with the id '" + request.id() + "' already exists");
@@ -57,7 +57,6 @@ public class CommitteeService {
         return toResponse(committees.save(committee), members.countGroupedByCommittee());
     }
 
-    @Transactional
     public CommitteeResponse update(String id, CommitteeRequest request) {
         Committee committee = require(id);
         /*
@@ -74,14 +73,32 @@ public class CommitteeService {
         return toResponse(committees.save(committee), members.countGroupedByCommittee());
     }
 
-    @Transactional
+    /**
+     * Deletes a committee and unassigns its members.
+     *
+     * <p>The unassignment is the {@code ON DELETE SET NULL} the relational schema declared
+     * and Firestore cannot. It is done FIRST and deliberately: if the members batch fails,
+     * the committee still exists and the data is consistent, whereas deleting the committee
+     * first and then failing would leave members referencing a document that is gone.
+     *
+     * <p>The two writes are not atomic with each other — Firestore batches cannot span the
+     * rollback of a preceding one — so the ordering is the guarantee. Worst case is a
+     * committee whose members are already unassigned, which is visible and repairable;
+     * the reverse would be invisible.
+     */
     public void delete(String id) {
         Committee committee = require(id);
-        // Members survive (the FK is ON DELETE SET NULL) but their photos belong to them,
-        // so only the committee's own coordinator photos are released here.
+        int unassigned = members.clearCommittee(id);
+
+        // Members survive; their photos belong to them, so only the committee's own
+        // coordinator photos are released here.
         media.deleteQuietly(committee.getCoordinatorPhotoId());
         media.deleteQuietly(committee.getCoordinator2PhotoId());
-        committees.delete(committee);
+        committees.deleteById(id);
+
+        if (unassigned > 0) {
+            log.info("Deleted committee '{}' and unassigned {} member(s).", id, unassigned);
+        }
     }
 
     /**
@@ -91,7 +108,6 @@ public class CommitteeService {
      * row on each move — rewrites the whole table for a one-position change, and two
      * admins reordering at once would leave the sequence with duplicates.
      */
-    @Transactional
     public List<CommitteeResponse> move(String id, String direction) {
         Committee committee = require(id);
         Committee neighbour = ("up".equals(direction)

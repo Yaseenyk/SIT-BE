@@ -1,8 +1,6 @@
-# Test profile. The datasource comes from Testcontainers via @ServiceConnection,
-# so only the things that must not be inherited from the real environment are set.
-spring:
-  jpa:
-    show-sql: false
+# Test profile. The Firestore connection comes from FIRESTORE_EMULATOR_HOST, set by
+# FirestoreIntegrationTest, so only the things that must not be inherited from the
+# real environment are pinned here.
 aisa:
   cors:
     allowed-origins: http://localhost:3000

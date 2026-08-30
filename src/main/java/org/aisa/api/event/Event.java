@@ -1,9 +1,5 @@
 package org.aisa.api.event;
 
-import jakarta.persistence.Column;
-import jakarta.persistence.Entity;
-import jakarta.persistence.Id;
-import jakarta.persistence.Table;
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.Locale;
@@ -22,8 +18,6 @@ import org.aisa.api.common.BaseEntity;
  * someone opening the page, and a differently-formatted date stayed in the wrong list for
  * good. Here the date is a real date and the split is derived at read time.
  */
-@Entity
-@Table(name = "event")
 @Getter
 @Setter
 @NoArgsConstructor
@@ -34,17 +28,13 @@ public class Event extends BaseEntity {
     private static final DateTimeFormatter DAY_ONLY =
             DateTimeFormatter.ofPattern("MMM d", Locale.ENGLISH);
 
-    @Id
     private UUID id;
 
-    @Column(nullable = false, length = 200)
     private String title;
 
-    @Column(name = "starts_on", nullable = false)
     private LocalDate startsOn;
 
     /** Set only for multi-day events. */
-    @Column(name = "ends_on")
     private LocalDate endsOn;
 
     /**
@@ -54,25 +44,18 @@ public class Event extends BaseEntity {
      * preserved exactly, and so an admin can write "Every Friday in March" without the
      * schema needing a recurrence model it would use twice.
      */
-    @Column(name = "date_label", length = 120)
     private String dateLabel;
 
-    @Column(length = 64)
     private String tag;
 
-    @Column(length = 16)
     private String emoji;
 
-    @Column
     private String description;
 
-    @Column(name = "link_url", length = 500)
     private String linkUrl;
 
-    @Column(name = "banner_url")
     private String bannerUrl;
 
-    @Column(name = "banner_public_id", length = 255)
     private String bannerPublicId;
 
     public Event(String title, LocalDate startsOn) {

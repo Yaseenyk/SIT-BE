@@ -8,7 +8,7 @@ When a rule here conflicts with a general habit, this file wins.
 ## 0. What this is
 
 The API behind **AISA**, the AIML Student Association site at BSIET Kolhapur.
-Spring Boot 3.5 · Java 25 · PostgreSQL · Flyway · JWT · Cloudinary.
+Spring Boot 3.5 · Java 25 · Cloud Firestore · JWT · Cloudinary.
 
 The frontend is a separate repository:
 [Yaseenyk/SIT-FE](https://github.com/Yaseenyk/SIT-FE) — a static export on GitHub Pages,
@@ -44,15 +44,56 @@ Read `docs/architecture.md` before changing anything structural.
 
 ---
 
-## 2. Flyway owns the schema
+## 2. Firestore has no schema, so the code is the schema
 
-- `spring.jpa.hibernate.ddl-auto` is `validate` in every profile. **Never** set it to
-  `update` — not "just locally". Hibernate silently altering a table is how a schema drifts
-  out of sync with its migrations.
-- Schema changes are a **new** `V<n>__description.sql`. Never edit an applied migration;
-  Flyway checksums them and the next deploy fails.
-- A migration may run against a database an admin has already edited. Prefer
-  `INSERT … ON CONFLICT DO NOTHING` and targeted `UPDATE`s; **never `DELETE`** their work.
+There are no migrations and nothing validates a document's shape. That moves work onto
+you, permanently:
+
+- **Mapping is written by hand** in each repository's `toX`/`toMap`, plus
+  `firestore/Documents.java`. Do NOT switch to the SDK's reflective POJO mapper: it reads
+  `null` for a renamed or retyped field instead of failing, and `null` is a legitimate
+  value for most fields here — so the breakage would first appear as a blank page, not an
+  exception.
+- **Collection names live in `firestore/Collections.java`.** A typo does not fail;
+  Firestore creates the collection, and the data silently splits in two.
+- **Dates are ISO strings** (`"2026-09-11"`), because lexicographic order equals
+  chronological order, so range queries work with no extra machinery.
+- **The seeder is guarded per collection** and must stay idempotent. It may run against a
+  project an admin has already edited; it must never overwrite or delete their work.
+
+### Derived fields are written, never scheduled
+
+`event.lastDay` (= `endsOn ?? startsOn`) exists because Firestore cannot compare two
+fields, which is how upcoming/past used to be expressed. It is recomputed **on every
+save**, in `EventRepository.toMap`, so it cannot drift from the fields it derives from.
+
+**Never replace it with a scheduled job.** That is precisely the original site's
+`autoSortEvents()` bug — a value correct only as often as something remembers to update it.
+
+---
+
+## 2b. Referential integrity is now your job (hard rule)
+
+Firestore enforces none. Two rules carry what a foreign key used to:
+
+- **Reference committees by their immutable slug id, never by name.** The original site
+  matched on display name, so renaming a committee orphaned every member on it.
+- **`CommitteeService.delete` unassigns members FIRST, then deletes the committee.** That
+  ordering is the guarantee: the two writes are not atomic with each other, and failing
+  after the unassign leaves consistent data whereas failing after the delete leaves
+  members pointing at a document that is gone.
+
+`ReferentialIntegrityTest` pins all of it. **Never weaken it.** The failure it guards
+against throws nothing and shows nothing — a member simply vanishes from the structure
+page while still counting towards the member total.
+
+### Ordering and grouping happen in memory
+
+`nulls last`, `group by`, and `max(displayOrder)` have no Firestore equivalent, and
+`orderBy` on a field **omits documents that lack it entirely** — an achievement saved with
+no date would disappear rather than sort last. These collections hold tens of documents;
+sorting them in Java is correct, index-free, and cannot lose a record. Do not "optimise"
+them into Firestore queries without re-reading this.
 
 ---
 
@@ -61,7 +102,7 @@ Read `docs/architecture.md` before changing anything structural.
 `Controller` → `Service` → `Repository`.
 
 - Controllers do routing, `@Valid`, and status codes. No business logic.
-- Services own transactions and never import a web type. Signal HTTP outcomes with the
+- Services never import a web type. Signal HTTP outcomes with the
   exceptions in `common/` — `NotFoundException`, `ConflictException`,
   `RateLimitedException`, `ServiceUnavailableException`. Throwing Spring's
   `ResponseStatusException` from a service both leaks a web concern into the service layer
@@ -70,6 +111,18 @@ Read `docs/architecture.md` before changing anything structural.
   admin-only columns — Cloudinary public ids, the notification email — and couples the JSON
   shape to column names.
 
+### Atomicity
+
+There are no Spring transactions — `@Transactional` does nothing against Firestore and is
+gone. What remains:
+
+- A single document write is atomic on its own.
+- Multi-document operations use a `WriteBatch` (album create/delete, committee reorder,
+  member unassign).
+- **Operations spanning collections or an external service are NOT atomic.** Deleting a
+  committee touches members, the committee, and Cloudinary; ordering is what makes the
+  failure modes survivable. Say so in a comment wherever it matters.
+
 ### Errors
 
 One shape, from `GlobalExceptionHandler`. Never build an error body in a controller, and
@@ -77,9 +130,12 @@ never let a stack trace reach the client.
 
 ### Validation at the boundary
 
-Bean Validation on the request record. Rules a constraint cannot express (an end date
-before a start date) are checked in the service with a readable message **and** backed by a
-database constraint. Not in between.
+Bean Validation on the request record. Rules it cannot express (an end date before a start
+date) are checked in the service with a readable message.
+
+There is **no database constraint behind any of it any more** — Firestore has no CHECK, no
+NOT NULL, no UNIQUE. The service layer is the only thing standing between a bad payload and
+a stored document, so a validation gap here is a data-corruption bug, not a UX one.
 
 ---
 
@@ -121,8 +177,9 @@ depending on when the suite runs.
 
 ## 7. Definition of done
 
-- [ ] `mvn verify` passes (Testcontainers needs Docker running)
-- [ ] Schema changes are a new migration, never an edit to an applied one
+- [ ] `mvn verify` passes (needs the Firestore emulator running)
+- [ ] New/renamed document fields are handled in the repository mapper AND the seeder
+- [ ] Anything derived is written on save, never scheduled
 - [ ] New endpoints have a case in `SecurityRulesIntegrationTest`
 - [ ] DTOs in, DTOs out — no entity crosses the controller boundary
 - [ ] New config is in `.env.example` **and** `docs/deployment.md`

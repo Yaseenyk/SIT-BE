@@ -21,12 +21,31 @@ jobs:
           distribution: temurin
           cache: maven
 
-      # Testcontainers starts a real Postgres. ubuntu-latest runners have Docker
-      # available, so nothing needs installing — but the tests DO need it, which is why
-      # this job cannot run on a container-less runner.
+      # The Firestore emulator is a Java process shipped by the Firebase CLI, which is a
+      # Node package — so both runtimes are needed even though this is a Java project.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install the Firebase CLI
+        run: npm install -g firebase-tools
+
+      # `emulators:exec` starts the emulator, runs the command, and shuts it down —
+      # including when the command fails, so a failing test cannot leave a process behind
+      # and wedge the runner.
+      #
+      # The tests talk to the emulator, never to a real project: FirestoreConfig treats
+      # FIRESTORE_EMULATOR_HOST as an absolute switch and reads no credentials when it is
+      # set. There is therefore no Firebase service account in CI, and nothing here can
+      # write to production data.
       - name: Test
-        run: mvn -B verify
+        run: |
+          firebase emulators:exec \
+            --only firestore \
+            --project aisa-local \
+            "mvn -B verify"
         env:
+          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
           # The application refuses to start without a signing key, by design. This one is
           # for CI only and grants nothing: it never leaves the runner.
           JWT_SECRET: Y2ktb25seS1zaWduaW5nLWtleS1hdC1sZWFzdC0zMi1ieXRlcy1sb25n

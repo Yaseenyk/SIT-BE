@@ -19,7 +19,6 @@ import org.aisa.api.config.AisaProperties;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class ContactMessageService {
@@ -64,7 +63,6 @@ public class ContactMessageService {
     /**
      * @return true if the message was stored, false if it was silently discarded as spam
      */
-    @Transactional
     public boolean submit(ContactRequest request, HttpServletRequest httpRequest) {
         if (request.website() != null && !request.website().isBlank()) {
             log.debug("Discarded a contact submission that filled the honeypot field");
@@ -73,7 +71,7 @@ public class ContactMessageService {
 
         String ipHash = hashClientIp(httpRequest);
         Instant windowStart = clock.instant().minus(RATE_WINDOW);
-        if (messages.countBySenderIpHashAndCreatedAtAfter(ipHash, windowStart) >= rateLimitPerHour) {
+        if (messages.countRecentFrom(ipHash, windowStart) >= rateLimitPerHour) {
             throw new RateLimitedException(
                     "You have sent several messages already. Please try again in an hour.");
         }
@@ -92,28 +90,25 @@ public class ContactMessageService {
         return true;
     }
 
-    @Transactional(readOnly = true)
     public List<MessageResponse> findAll() {
-        return messages.findAllByOrderByCreatedAtDesc().stream()
+        return messages.findAllNewestFirst().stream()
                 .map(ContactMessageService::toResponse)
                 .toList();
     }
 
-    @Transactional(readOnly = true)
     public long countUnread() {
-        return messages.countByReadFalse();
+        return messages.countUnread();
     }
 
-    @Transactional
     public MessageResponse markRead(UUID id, boolean read) {
         ContactMessage message = require(id);
         message.setRead(read);
         return toResponse(messages.save(message));
     }
 
-    @Transactional
     public void delete(UUID id) {
-        messages.delete(require(id));
+        require(id);
+        messages.deleteById(id);
     }
 
     private ContactMessage require(UUID id) {

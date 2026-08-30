@@ -1,46 +1,48 @@
 # Local development.
 #
-#   docker compose up -d db     # Postgres only; run the app from your IDE
-#   docker compose up           # the whole stack, as it runs in production
+#   docker compose up            # API against the Firestore EMULATOR — no credentials
+#   docker compose up api        # API against the real Firebase project (needs .env)
 #
-# Production uses a managed Postgres, so this file is not the deployment
-# descriptor — render.yaml is.
+# There is no database service here any more: Firestore is managed, and the emulator
+# stands in for it locally so development never touches the real project by accident.
 
 services:
-  db:
-    image: postgres:16-alpine
-    environment:
-      POSTGRES_DB: aisa
-      POSTGRES_USER: aisa
-      POSTGRES_PASSWORD: aisa
+  # The Firestore emulator, from the official Firebase CLI image.
+  # Data is in-memory and discarded on stop — the seeder repopulates on next boot,
+  # which is exactly what you want from a scratch environment.
+  firestore:
+    image: node:24-alpine
+    working_dir: /work
+    command: >
+      sh -c "npm i -g firebase-tools >/dev/null 2>&1 &&
+             firebase emulators:start --only firestore
+             --project aisa-local --host 0.0.0.0"
     ports:
-      # Published so the app can also be run straight from an IDE against it.
-      - "5432:5432"
-    volumes:
-      - aisa-db:/var/lib/postgresql/data
+      - "8085:8080"   # Firestore emulator
+      - "4000:4000"   # Emulator UI
     healthcheck:
-      # The API's Flyway migration runs at startup and fails outright if Postgres
-      # is not accepting connections yet, so the app must wait for this, not just
+      # The app's seeder runs at startup and fails outright if the emulator is not
+      # accepting connections yet, so the API must wait for this rather than merely
       # for the container to exist.
-      test: ["CMD-SHELL", "pg_isready -U aisa -d aisa"]
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/", "||", "exit", "1"]
       interval: 5s
       timeout: 5s
-      retries: 10
+      retries: 20
+      start_period: 60s
 
   api:
     build: .
     depends_on:
-      db:
+      firestore:
         condition: service_healthy
     environment:
-      # 'db' is the compose service name, resolved on the compose network.
-      DATABASE_URL: jdbc:postgresql://db:5432/aisa
-      DATABASE_USERNAME: aisa
-      DATABASE_PASSWORD: aisa
+      # Pointing at the emulator makes FirestoreConfig ignore credentials entirely,
+      # so a misconfigured local run cannot write to the real project.
+      FIRESTORE_EMULATOR_HOST: firestore:8080
+      FIREBASE_PROJECT_ID: aisa-local
       SPRING_PROFILES_ACTIVE: dev
-      # 3001 as well as 3000: `next dev` silently falls back to the next free port when
-      # something else already holds 3000, and the resulting CORS failure looks like the
-      # API being down rather than like a port clash.
+      # 3001 too: `next dev` silently falls back to the next free port when something
+      # else holds 3000, and the resulting CORS failure looks like the API being down.
       CORS_ALLOWED_ORIGINS: http://localhost:3000,http://localhost:3001
       # Development-only key. Production reads JWT_SECRET from the host's secrets.
       JWT_SECRET: ZGV2ZWxvcG1lbnQtb25seS1rZXktbm90LWZvci1wcm9kdWN0aW9uLXVzZQ==
@@ -52,6 +54,3 @@ services:
       CLOUDINARY_API_SECRET: ${CLOUDINARY_API_SECRET:-}
     ports:
       - "8080:8080"
-
-volumes:
-  aisa-db:

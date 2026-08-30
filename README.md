@@ -3,7 +3,7 @@
 Backend for the **AIML Student Association** site, Department of CSE (AI & ML), Dr. Bapuji
 Salunkhe Institute of Engineering & Technology, Kolhapur.
 
-Spring Boot 3.5 · Java 25 · PostgreSQL · Flyway · JWT · Cloudinary
+Spring Boot 3.5 · Java 25 · **Cloud Firestore** · JWT · Cloudinary
 
 > **Frontend:** [Yaseenyk/SIT-FE](https://github.com/Yaseenyk/SIT-FE) — a Next.js static
 > export on GitHub Pages. It talks to this API over HTTPS.
@@ -12,22 +12,32 @@ Spring Boot 3.5 · Java 25 · PostgreSQL · Flyway · JWT · Cloudinary
 
 ## Quick start
 
-Docker required for the database.
+No database to install — Firestore is managed. Develop against the **emulator**, so
+nothing touches the real project:
 
 ```bash
 cp .env.example .env      # set JWT_SECRET (openssl rand -base64 48)
                           # and ADMIN_BOOTSTRAP_PASSWORD
-docker compose up         # API on :8080
+
+# terminal 1 — the emulator
+npx firebase-tools emulators:start --only firestore --project aisa-local
+
+# terminal 2 — the API
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8085 mvn spring-boot:run
 ```
+
+To run against the real project instead, set `FIREBASE_PROJECT_ID` and
+`FIREBASE_SERVICE_ACCOUNT` in `.env` and leave `FIRESTORE_EMULATOR_HOST` unset.
 
 - API docs (Swagger UI): <http://localhost:8080/docs>
 - Health: <http://localhost:8080/actuator/health>
 
-Flyway creates the schema and seeds the association's committees, members, events and
-sample content on first boot. Sign in to the frontend's `/admin/` with the bootstrap
-credentials, then change the password.
+On first boot against an **empty** project the seeder writes the association's committees,
+members, events and achievements. It is guarded per collection, so it never overwrites and
+never runs twice — pointing this at the original site's existing Firestore finds the
+collections already populated and writes nothing.
 
-Running the app from an IDE instead? `docker compose up -d db` gives you just Postgres.
+Sign in to the frontend's `/admin/` with the bootstrap credentials, then change the password.
 
 ---
 
@@ -40,8 +50,8 @@ Auth, Storage) directly from the browser, with the config key committed in the m
 | --- | --- | --- |
 | Authorisation | Firestore rules; any authenticated client could write | One rule set in `SecurityConfig`, covered by an integration test |
 | Login hardening | Browser-side captcha and attempt counter — both reset on reload | BCrypt + per-account lockout in the database |
-| Events | `'Oct 10–12, 2024'` strings re-parsed on every page load | Real dates; upcoming/past derived server-side |
-| Members | Committee matched by display name — renaming orphaned them | Foreign key, `ON DELETE SET NULL` |
+| Events | `'Oct 10–12, 2024'` strings re-parsed on every page load | Real dates + a derived `lastDay` field; upcoming/past computed server-side |
+| Members | Committee matched by display **name** — renaming orphaned them | Referenced by immutable id; delete unassigns them explicitly |
 | Images | Firebase Storage: any size, any path | Cloudinary signed direct upload, resize enforced server-side |
 
 `docs/architecture.md` has the full account.
@@ -74,7 +84,9 @@ sensitive is committed. See `.env.example` for the annotated list.
 
 | Variable | Notes |
 | -------- | ----- |
-| `DATABASE_URL` | Either `postgres://…` (converted on startup) or `jdbc:postgresql://…` |
+| `FIREBASE_PROJECT_ID` | The Firebase project holding the data |
+| `FIREBASE_SERVICE_ACCOUNT` | The service-account JSON, raw or base64. **A private key** |
+| `FIRESTORE_EMULATOR_HOST` | Set locally to use the emulator; ignores the two above |
 | `JWT_SECRET` | Required — the app refuses to start without it. `openssl rand -base64 48` |
 | `CORS_ALLOWED_ORIGINS` | The SIT-FE origin, exactly. No trailing slash, no path |
 | `CLOUDINARY_*` | Image uploads. Unset is fine: everything else works, uploads return 503 |
@@ -95,19 +107,25 @@ src/main/java/org/aisa/api/
 ├── media/       Cloudinary signed uploads
 └── stats/       the counters the home page and dashboard read
 
-src/main/resources/db/migration/   Flyway — the only thing allowed to change the schema
+└── firestore/    the Firestore client, document mapping, collection names, the seeder
 ```
 
-`ddl-auto` is `validate` everywhere. Schema changes are a **new** `V<n>__*.sql`; never edit
-an applied migration, because Flyway checksums them.
+There is no schema and no migrations. Firestore accepts any shape, which moves the burden
+onto the mapping layer: `firestore/Documents.java` converts every field by hand, because
+the SDK's reflective mapper silently reads `null` for a field that was renamed — and null
+is legitimate for most fields here, so nothing would surface until a page rendered blank.
 
 ---
 
 ## Checks
 
 ```bash
-mvn verify        # needs Docker running — Testcontainers starts a real Postgres
+# start the emulator first (see Quick start), then:
+FIRESTORE_EMULATOR_HOST=127.0.0.1:8085 mvn verify
 ```
+
+`ReferentialIntegrityTest` is the one to keep green: Firestore enforces no integrity, so the
+guarantees a foreign key used to give are now ordinary code that can be deleted by accident.
 
 ---
 
@@ -116,13 +134,10 @@ mvn verify        # needs Docker running — Testcontainers starts a real Postgr
 `render.yaml` is a Render blueprint describing the service and its database:
 **New → Blueprint** → point at this repo.
 
-Render wires the database's connection string into `DATABASE_URL` for you. It arrives in
-`postgres://…` form, which JDBC does not accept — the application converts it on startup,
-so there is nothing to edit. Full walkthrough and troubleshooting in `docs/deployment.md`.
-
-> Render's free Postgres **expires after 30 days**. For a site that must survive a
-> semester, move to a paid tier or point `DATABASE_URL` at Supabase or Neon — it is plain
-> PostgreSQL, so nothing in the code changes.
+Render runs **only the API** — Firestore is hosted by Google, so there is no database
+service to provision and nothing that expires. Set `FIREBASE_PROJECT_ID` and
+`FIREBASE_SERVICE_ACCOUNT` (base64) in the dashboard. Full walkthrough in
+`docs/deployment.md`.
 
 ---
 

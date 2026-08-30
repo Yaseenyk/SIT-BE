@@ -23,6 +23,7 @@
     <maven.compiler.target>25</maven.compiler.target>
     <lombok.version>1.18.38</lombok.version>
     <cloudinary.version>1.39.0</cloudinary.version>
+    <firebase.admin.version>9.4.3</firebase.admin.version>
     <springdoc.version>2.8.4</springdoc.version>
     <jjwt.version>0.12.6</jjwt.version>
   </properties>
@@ -41,10 +42,6 @@
     </dependency>
     <dependency>
       <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-starter-data-jpa</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
       <artifactId>spring-boot-starter-security</artifactId>
     </dependency>
     <dependency>
@@ -54,19 +51,6 @@
 
     <!-- Schema is versioned in db/migration and applied on boot. ddl-auto is set to
          'validate' everywhere, so Flyway is the ONLY thing allowed to change the schema. -->
-    <dependency>
-      <groupId>org.flywaydb</groupId>
-      <artifactId>flyway-core</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.flywaydb</groupId>
-      <artifactId>flyway-database-postgresql</artifactId>
-    </dependency>
-    <dependency>
-      <groupId>org.postgresql</groupId>
-      <artifactId>postgresql</artifactId>
-      <scope>runtime</scope>
-    </dependency>
 
     <!-- Reads .env into the Spring Environment so local dev and the deployed container
          are configured the same way (see docs/deployment.md). -->
@@ -92,6 +76,15 @@
       <artifactId>jjwt-jackson</artifactId>
       <version>${jjwt.version}</version>
       <scope>runtime</scope>
+    </dependency>
+
+    <!-- Firestore, via the Firebase Admin SDK. Pulls google-cloud-firestore transitively;
+         using the Firebase artifact rather than the bare GCP one keeps credential handling
+         identical to the console the admins already use. -->
+    <dependency>
+      <groupId>com.google.firebase</groupId>
+      <artifactId>firebase-admin</artifactId>
+      <version>${firebase.admin.version}</version>
     </dependency>
 
     <dependency>
@@ -124,21 +117,6 @@
     <dependency>
       <groupId>org.springframework.security</groupId>
       <artifactId>spring-security-test</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.springframework.boot</groupId>
-      <artifactId>spring-boot-testcontainers</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.testcontainers</groupId>
-      <artifactId>postgresql</artifactId>
-      <scope>test</scope>
-    </dependency>
-    <dependency>
-      <groupId>org.testcontainers</groupId>
-      <artifactId>junit-jupiter</artifactId>
       <scope>test</scope>
     </dependency>
   </dependencies>

@@ -11,7 +11,6 @@ import org.aisa.api.gallery.GalleryDtos.GalleryItemResponse;
 import org.aisa.api.gallery.GalleryDtos.UpdateGalleryRequest;
 import org.aisa.api.media.MediaService;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class GalleryService {
@@ -26,17 +25,15 @@ public class GalleryService {
         this.clock = clock;
     }
 
-    @Transactional(readOnly = true)
     public List<GalleryItemResponse> findAll(String category) {
         List<GalleryItem> found = (category == null || category.isBlank() || "all".equalsIgnoreCase(category))
-                ? items.findAllByOrderByCreatedAtDesc()
-                : items.findByCategoryOrderByCreatedAtDesc(category);
+                ? items.findAllNewestFirst()
+                : items.findByCategory(category);
         return found.stream().map(GalleryService::toResponse).toList();
     }
 
-    @Transactional(readOnly = true)
     public List<GalleryItemResponse> findAlbum(String albumId) {
-        List<GalleryItem> found = items.findByAlbumIdOrderByAlbumIndexAsc(albumId);
+        List<GalleryItem> found = items.findByAlbum(albumId);
         if (found.isEmpty()) {
             throw new NotFoundException("Album", albumId);
         }
@@ -49,7 +46,6 @@ public class GalleryService {
      * <p>One transaction for the batch: an album is all-or-nothing, and a partial album
      * with gaps in {@code albumIndex} would break the lightbox's next/previous.
      */
-    @Transactional
     public List<GalleryItemResponse> create(CreateGalleryRequest request) {
         List<GalleryImage> images = request.images();
         boolean isAlbum = images.size() > 1;
@@ -82,7 +78,6 @@ public class GalleryService {
         return items.saveAll(created).stream().map(GalleryService::toResponse).toList();
     }
 
-    @Transactional
     public GalleryItemResponse update(UUID id, UpdateGalleryRequest request) {
         GalleryItem item = require(id);
         item.setTitle(request.title().trim());
@@ -92,11 +87,10 @@ public class GalleryService {
         return toResponse(items.save(item));
     }
 
-    @Transactional
     public void delete(UUID id) {
         GalleryItem item = require(id);
         media.deleteQuietly(item.getPublicId());
-        items.delete(item);
+        items.deleteById(id);
     }
 
     /**
@@ -105,9 +99,8 @@ public class GalleryService {
      * <p>Exists because the alternative — the dashboard firing one DELETE per photo —
      * leaves a half-deleted album on screen if the browser is closed midway.
      */
-    @Transactional
     public void deleteAlbum(String albumId) {
-        List<GalleryItem> album = items.findByAlbumIdOrderByAlbumIndexAsc(albumId);
+        List<GalleryItem> album = items.findByAlbum(albumId);
         if (album.isEmpty()) {
             throw new NotFoundException("Album", albumId);
         }

@@ -6,7 +6,6 @@ import jakarta.validation.constraints.Size;
 import java.time.Clock;
 import java.time.Instant;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 @Service
 public class SettingsService {
@@ -62,18 +61,15 @@ public class SettingsService {
             /** Null means it runs until removed by hand. */
             Instant expiresAt) {}
 
-    @Transactional(readOnly = true)
     public PublicSettings getPublic() {
         return toPublic(load());
     }
 
-    @Transactional(readOnly = true)
     public AdminSettings getForAdmin() {
         SiteSettings settings = load();
         return new AdminSettings(toPublic(settings), settings.getNotificationEmail(), settings.getUpdatedAt());
     }
 
-    @Transactional
     public AdminSettings update(SettingsRequest request) {
         SiteSettings settings = load();
         settings.setPhone(blankToNull(request.phone()));
@@ -98,7 +94,6 @@ public class SettingsService {
         return getForAdmin();
     }
 
-    @Transactional
     public Announcement setAnnouncement(AnnouncementRequest request) {
         SiteSettings settings = load();
         settings.setAnnouncementText(request.text().trim());
@@ -108,7 +103,6 @@ public class SettingsService {
         return new Announcement(settings.getAnnouncementText(), settings.getAnnouncementExpiresAt());
     }
 
-    @Transactional
     public void clearAnnouncement() {
         SiteSettings settings = load();
         settings.setAnnouncementText(null);
@@ -118,15 +112,16 @@ public class SettingsService {
     }
 
     /**
-     * Loads the singleton, creating it if the row is somehow missing.
+     * Loads the settings document, creating an empty one if it is missing.
      *
-     * <p>V2 inserts it, so this should never fire. It is here because the alternative is
-     * an Optional every caller has to unwrap for a case the schema forbids, and because a
-     * database restored from a partial dump should not take the whole site down.
+     * <p>The seeder writes it on first boot, so this rarely fires. It matters more here
+     * than it did on SQL: a relational schema could guarantee the row existed, whereas
+     * Firestore has no such thing as a required document — the collection is simply empty
+     * until something writes to it. Returning an empty settings object keeps the public
+     * site rendering (with no phone number) instead of failing every page load.
      */
     private SiteSettings load() {
-        return repository.findById(SiteSettings.SINGLETON_ID)
-                .orElseGet(() -> repository.save(new SiteSettings()));
+        return repository.find().orElseGet(() -> repository.save(new SiteSettings()));
     }
 
     private PublicSettings toPublic(SiteSettings s) {
