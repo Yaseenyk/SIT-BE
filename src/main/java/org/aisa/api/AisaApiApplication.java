@@ -1,6 +1,7 @@
 package org.aisa.api;
 
 import org.aisa.api.config.AisaProperties;
+import org.aisa.api.config.DatabaseUrl;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -20,6 +21,14 @@ import org.springframework.data.jpa.repository.config.EnableJpaAuditing;
 public class AisaApiApplication {
 
     public static void main(String[] args) {
+        /*
+         * Before the context exists: managed Postgres providers hand out
+         * postgres://user:pass@host/db, which the JDBC driver rejects. Converting it here
+         * means DATABASE_URL can be wired straight from the platform with no manual step.
+         * A jdbc: URL passes through untouched.
+         */
+        DatabaseUrl.applyFromEnvironment(System.getProperties());
+
         SpringApplication.run(AisaApiApplication.class, args);
     }
 }

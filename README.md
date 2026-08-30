@@ -74,7 +74,7 @@ sensitive is committed. See `.env.example` for the annotated list.
 
 | Variable | Notes |
 | -------- | ----- |
-| `DATABASE_URL` | **JDBC form**: `jdbc:postgresql://host:5432/db`. Render's `postgres://…` string is not accepted |
+| `DATABASE_URL` | Either `postgres://…` (converted on startup) or `jdbc:postgresql://…` |
 | `JWT_SECRET` | Required — the app refuses to start without it. `openssl rand -base64 48` |
 | `CORS_ALLOWED_ORIGINS` | The SIT-FE origin, exactly. No trailing slash, no path |
 | `CLOUDINARY_*` | Image uploads. Unset is fine: everything else works, uploads return 503 |
@@ -116,9 +116,9 @@ mvn verify        # needs Docker running — Testcontainers starts a real Postgr
 `render.yaml` is a Render blueprint describing the service and its database:
 **New → Blueprint** → point at this repo.
 
-One manual step: Render hands you a `postgres://…` connection string, which JDBC does not
-accept. Convert it to `jdbc:postgresql://host:5432/db` and set the username and password
-separately. Full walkthrough and troubleshooting in `docs/deployment.md`.
+Render wires the database's connection string into `DATABASE_URL` for you. It arrives in
+`postgres://…` form, which JDBC does not accept — the application converts it on startup,
+so there is nothing to edit. Full walkthrough and troubleshooting in `docs/deployment.md`.
 
 > Render's free Postgres **expires after 30 days**. For a site that must survive a
 > semester, move to a paid tier or point `DATABASE_URL` at Supabase or Neon — it is plain

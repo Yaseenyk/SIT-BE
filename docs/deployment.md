@@ -38,20 +38,17 @@ upload signature instead.
 `render.yaml` describes both the web service and the database. Render → **New →
 Blueprint** → point at this repository.
 
-### The one manual step: DATABASE_URL
+### DATABASE_URL
 
-Render's connection string is `postgres://user:pass@host/db`. **JDBC does not accept that
-form.** Convert it:
+Render's blueprint wires the database's connection string straight into `DATABASE_URL`.
+It is in `postgres://user:pass@host/db` form, which the JDBC driver does not accept — so
+**the application converts it on startup** (`DatabaseUrl`, called from `main`). Nothing to
+do by hand.
 
-```
-postgres://aisa:SECRET@dpg-xxxx.singapore-postgres.render.com/aisa_db
-                        ↓
-DATABASE_URL=jdbc:postgresql://dpg-xxxx.singapore-postgres.render.com:5432/aisa_db
-DATABASE_USERNAME=aisa
-DATABASE_PASSWORD=SECRET
-```
+The same holds for Supabase, Neon, Railway and Heroku, whose URLs share that shape; the
+query string is preserved, so `?sslmode=require` survives. A `jdbc:` URL is passed through
+untouched, which is what local development and the tests use.
 
-Use the **Internal** database URL — it does not leave Render's network.
 
 ### Environment variables
 
