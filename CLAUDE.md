@@ -1,187 +1,255 @@
-# CLAUDE.md — SIT-BE
+# CLAUDE.md — AISA
 
-AI guardrails for this repository. Binding for every code generation, refactor and review.
-When a rule here conflicts with a general habit, this file wins.
+AI guardrails for this repository. These rules are binding for every code generation,
+refactor, and review in this project. When a rule here conflicts with a general habit,
+this file wins.
 
 ---
 
-## 0. What this is
+## 0. Project identity
 
-The API behind **AISA**, the AIML Student Association site at BSIET Kolhapur.
-Spring Boot 3.5 · Java 25 · Cloud Firestore · JWT · Cloudinary.
+**AISA** — the AIML Student Association site for the Department of CSE (AI & ML),
+Dr. Bapuji Salunkhe Institute of Engineering & Technology, Kolhapur.
 
-The frontend is a separate repository:
-[Yaseenyk/SIT-FE](https://github.com/Yaseenyk/SIT-FE) — a static export on GitHub Pages,
-which is why this service must be reachable cross-origin and must own every write.
+Two deployables, one repository:
 
-Read `docs/architecture.md` before changing anything structural.
+| Directory | What it is | Where it runs |
+| --------- | ---------- | ------------- |
+| `fe/` | Next.js (App Router) + TypeScript + Tailwind v4, **static export** | GitHub Pages |
+| `be/` | Spring Boot 3 + Java 25 + **Cloud Firestore** + **Firebase Auth** | Render (Docker) |
+
+It replaces a single 4,019-line `AISA_Website .html` that called Firebase (Firestore,
+Auth, Storage) directly from the browser. Read `docs/architecture.md` before changing
+anything structural — it records what moved where, and why.
+
+**The one constraint that shapes everything:** GitHub Pages serves static files. There is
+no Node process on the frontend and no server-side rendering of content. Every piece of
+admin-editable content is fetched in the browser from the Java API.
 
 ---
 
 ## 1. The security model (hard rule)
 
-**Public reads. Admin writes. Enforced here, nowhere else.**
+**Public reads. Students act on their own behalf. Admins do everything else.
+Enforced on the server, nowhere else.**
 
-- Authorisation lives in `config/SecurityConfig.java` as *rules*, not as annotations
-  sprinkled across controllers. A rule you cannot see in that one file does not exist.
-  Do not add `@PreAuthorize` to individual handlers as a substitute.
-- **Public GETs are enumerated; everything else requires `ROLE_ADMIN`.** Never invert this
-  to a blanket `GET /api/v1/**` permit with carve-outs. That is what the first version did,
-  and `/settings/admin` slipped through it — publishing the staff notification address to
-  anonymous callers, with nothing anywhere to reveal it.
-- `SecurityRulesIntegrationTest` **must never be weakened**. Adding an endpoint means
-  adding its case there. A write endpoint reachable anonymously is the worst bug this
-  project can ship, and it throws no exception.
-- The frontend is **not** a security boundary. Never accept a check moved there.
+- Authorisation lives in `be/.../config/SecurityConfig.java` as *rules*, not as
+  annotations sprinkled across controllers. A rule you cannot see in that one file does
+  not exist. Do not add `@PreAuthorize` to individual handlers as a substitute.
+- `SecurityRulesIntegrationTest` is the test that must never be weakened. Adding an
+  endpoint means adding its case there. A write endpoint reachable anonymously is the
+  worst bug this project can ship, and it throws no exception.
+- **Nothing in `fe/` is a security boundary.** `AdminGate` decides which screen to show,
+  not what anyone is allowed to do. Never move a check into the client and delete the
+  server-side one.
+- **Identity is Firebase Auth; authorisation is ours.** Firebase answers "who is this";
+  `SecurityConfig` answers "what may they do". Never move an authorisation decision into
+  Firebase custom claims or into the client — that is precisely what the original
+  single-file site did wrong.
+- **Signing up can only ever produce a STUDENT.** `UserService.register` assigns the role
+  and ignores anything the client sends. A public form that can grant admin is the same
+  bug as an unauthenticated write endpoint. The first admin comes from `ADMIN_EMAIL` /
+  `ADMIN_PASSWORD` at boot; every later one is promoted by an existing admin.
+- **No token is stored by us.** The API client pulls a fresh Firebase ID token per request
+  (`setTokenProvider` in `lib/api/client.ts`); Firebase keeps its refresh token in
+  IndexedDB. Do not reintroduce a token in `localStorage`.
+- A valid token is not permission. `FirebaseAuthenticationFilter` grants one of
+  `ROLE_UNREGISTERED`, `ROLE_UNVERIFIED`, `ROLE_SUSPENDED`, `ROLE_STUDENT`, `ROLE_ADMIN`,
+  and `MeResponse.state` reports the same thing to the client. **The client must never
+  re-derive that state** — it did once, drifted immediately, and a refused signup showed
+  as a successful one.
 
 ### Secrets
 
-- Every secret comes from the environment (`.env` locally). Nowhere else.
-  `.env.example` documents each one and is the file you update when adding one.
-- The app **refuses to start without `JWT_SECRET`**, by design. Never add a default.
-- The original HTML this replaced had a live Firebase key committed in it. Do not
-  reintroduce that pattern for any provider.
+- Every secret lives in `be/.env` (git-ignored) and in the host's environment. Nowhere
+  else. `be/.env.example` documents each one and is the file you update when adding a new
+  one.
+- **Anything named `NEXT_PUBLIC_*` is compiled into the JavaScript the browser downloads.**
+  It is not a secret and never can be. If you find yourself wanting a secret in `fe/`, the
+  work belongs in `be/`.
+- The old file had a live Firebase API key committed in it. Do not reintroduce that
+  pattern for any provider.
 
 ---
 
-## 2. Firestore has no schema, so the code is the schema
+## 2. Frontend rules
 
-There are no migrations and nothing validates a document's shape. That moves work onto
-you, permanently:
+### Design tokens are mandatory
 
-- **Mapping is written by hand** in each repository's `toX`/`toMap`, plus
-  `firestore/Documents.java`. Do NOT switch to the SDK's reflective POJO mapper: it reads
-  `null` for a renamed or retyped field instead of failing, and `null` is a legitimate
-  value for most fields here — so the breakage would first appear as a blank page, not an
-  exception.
-- **Collection names live in `firestore/Collections.java`.** A typo does not fail;
-  Firestore creates the collection, and the data silently splits in two.
-- **Dates are ISO strings** (`"2026-09-11"`), because lexicographic order equals
-  chronological order, so range queries work with no extra machinery.
-- **The seeder is guarded per collection** and must stay idempotent. It may run against a
-  project an admin has already edited; it must never overwrite or delete their work.
+The palette is a straight port of the original site's CSS custom properties, declared once
+in `src/app/globals.css` under `@theme`.
 
-### Derived fields are written, never scheduled
+```tsx
+// ❌ never
+<span className="text-[#b3861a]">Events</span>
+<div style={{ background: "#07294d" }} />
 
-`event.lastDay` (= `endsOn ?? startsOn`) exists because Firestore cannot compare two
-fields, which is how upcoming/past used to be expressed. It is recomputed **on every
-save**, in `EventRepository.toMap`, so it cannot drift from the fields it derives from.
+// ✅ always
+<span className="text-gold">Events</span>
+<div className="bg-navy" />
+```
 
-**Never replace it with a scheduled job.** That is precisely the original site's
-`autoSortEvents()` bug — a value correct only as often as something remembers to update it.
+- Surfaces: `page` (warm off-white, never `#fff`), `surface`, `sunken`, `paper` (cards).
+- Structure: `navy-deep`, `navy`, `navy2`, `navy3`, `navy-tint`.
+- Accent: `gold`, `gold-bright` (on navy only), `gold-soft`; `clay` / `clay-soft` as the
+  third colour where navy-and-gold alone becomes monotonous.
+- Status, semantic only: `green`, `amber`, `red` and their `-soft` pairs.
+- Text and rules: `ink`, `body`, `muted`, `rule`, `rule-strong`.
+- Elevation is a scale, not one shadow: `shadow-raise`, `shadow-lift`, `shadow-float`.
+- Fonts: `font-serif` (Source Serif) for headings, `font-sans` (Inter) for body,
+  `font-mono` for numbers and labels.
+- Composed classes in `globals.css`: `.card`, `.card-hover`, `.band-navy`, `.pattern-dots`,
+  `.image-placeholder`, `.image-scrim`, `.reveal`, `.section-rule`.
+
+- **The two documented exceptions** are `committee.gradient` and the hero's radial wash:
+  both are per-record values authored by an admin or one-off art direction, so they can
+  only be inline styles. Everything else that reaches for `style={{}}` is a mistake.
+- **Two failed directions are recorded at the top of `globals.css`. Read them.** The first
+  build looked machine-generated (gradient headings, glow, particles); stripping all of it
+  produced a page that looked like a government form. Depth, warmth and pictures are what
+  fixed it — not ornament.
+- If a value you need genuinely has no token, **propose a token** rather than reaching for
+  an arbitrary value.
+
+### Tailwind only scans `src/`
+
+`globals.css` pins the scan with `@import "tailwindcss" source(none);` + `@source "../../src";`.
+Tailwind v4 otherwise scans the whole project, sweeps up this file and `docs/*.md` — which
+*name* utility classes while discussing them — and compiles them into the bundle. **Do not
+remove that pair.**
+
+### Never build a class name from a variable
+
+Tailwind scans source text. `bg-${tone}/10` is not in the output CSS and renders unstyled.
+Use a full-string lookup map, as `Badge` in `components/ui/primitives.tsx` does.
+
+### RSC by default
+
+- Every component is a Server Component until proven otherwise. `"use client"` belongs at
+  the lowest leaf that actually needs it.
+- `app/page.tsx` is and stays a Server Component: it is composition only.
+- Sections are client components because they fetch at runtime — that is inherent to a
+  static export, not laziness. Do not "fix" it by fetching in `page.tsx`; there is no
+  server to fetch on.
+
+### Data fetching
+
+- Components never build a URL. Every call goes through `lib/api/endpoints.ts`.
+- Every fetch goes through `useApi`, which gives loading / error / retry. Loading and
+  failure are **normal reachable states** here (the free-tier API sleeps), not edge cases.
+  A section that renders nothing on failure is incomplete work.
+- `useApi` deps must be **primitives**. They are joined into a string key.
+
+### Accessibility
+
+- One `<h1>` per page (the hero). Heading levels never skip.
+- Every interactive element is a real `<button>` or `<a>` and is keyboard-operable.
+  A `<div onClick>` is a bug.
+- Decorative canvases and icons get `aria-hidden`.
+- `prefers-reduced-motion` is honoured — `globals.css` kills every animation AND forces
+  `.reveal` visible. A reveal that animates from `opacity: 0` and never runs is a section
+  nobody can read, so the override is not optional.
 
 ---
 
-## 2b. Referential integrity is now your job (hard rule)
+## 3. Backend rules
 
-Firestore enforces none. Two rules carry what a foreign key used to:
+### Firestore has no schema, so the code is the schema
 
-- **Reference committees by their immutable slug id, never by name.** The original site
-  matched on display name, so renaming a committee orphaned every member on it.
-- **`CommitteeService.delete` unassigns members FIRST, then deletes the committee.** That
-  ordering is the guarantee: the two writes are not atomic with each other, and failing
-  after the unassign leaves consistent data whereas failing after the delete leaves
-  members pointing at a document that is gone.
+- There are no migrations, because there is nothing to migrate. Every document is mapped
+  by hand in a repository (`toX` / `toMap`), never by the SDK's reflective POJO mapper —
+  which reads `null` for a renamed field instead of failing, and `null` is legitimate for
+  most fields here, so nothing would surface until a page rendered blank.
+- **Firestore has no cascade and no foreign keys.** Deleting anything means deleting what
+  pointed at it, in the same service method, and `ReferentialIntegrityTest` is what proves
+  it. A new collection that references another means wiring that path too.
+- Derived fields used by queries (`Event.lastDay`) are written on EVERY save, or a query
+  silently misses documents saved before the field existed.
 
-`ReferentialIntegrityTest` pins all of it. **Never weaken it.** The failure it guards
-against throws nothing and shows nothing — a member simply vanishes from the structure
-page while still counting towards the member total.
+### Layering
 
-### Ordering and grouping happen in memory
+`Controller` → `Service` → `Repository`. Controllers do routing, validation
+(`@Valid`) and status codes; they contain no business logic. Services own transactions.
 
-`nulls last`, `group by`, and `max(displayOrder)` have no Firestore equivalent, and
-`orderBy` on a field **omits documents that lack it entirely** — an achievement saved with
-no date would disappear rather than sort last. These collections hold tens of documents;
-sorting them in Java is correct, index-free, and cannot lose a record. Do not "optimise"
-them into Firestore queries without re-reading this.
+### Never serialise an entity
 
----
-
-## 3. Layering
-
-`Controller` → `Service` → `Repository`.
-
-- Controllers do routing, `@Valid`, and status codes. No business logic.
-- Services never import a web type. Signal HTTP outcomes with the
-  exceptions in `common/` — `NotFoundException`, `ConflictException`,
-  `RateLimitedException`, `ServiceUnavailableException`. Throwing Spring's
-  `ResponseStatusException` from a service both leaks a web concern into the service layer
-  and gets swallowed by the catch-all handler, turning a deliberate 503 into a 500.
-- **Never serialise an entity.** Controllers return DTOs. Returning an entity leaks
-  admin-only columns — Cloudinary public ids, the notification email — and couples the JSON
-  shape to column names.
-
-### Atomicity
-
-There are no Spring transactions — `@Transactional` does nothing against Firestore and is
-gone. What remains:
-
-- A single document write is atomic on its own.
-- Multi-document operations use a `WriteBatch` (album create/delete, committee reorder,
-  member unassign).
-- **Operations spanning collections or an external service are NOT atomic.** Deleting a
-  committee touches members, the committee, and Cloudinary; ordering is what makes the
-  failure modes survivable. Say so in a comment wherever it matters.
+Controllers return DTOs (`*Dtos.java` or a record nested in the service). Returning an
+entity leaks admin-only columns — the Cloudinary `public_id` fields, the notification
+email — and couples the JSON shape to column names.
 
 ### Errors
 
-One shape, from `GlobalExceptionHandler`. Never build an error body in a controller, and
-never let a stack trace reach the client.
+One shape, from `GlobalExceptionHandler`. Throw `NotFoundException`, `ConflictException`,
+`RateLimitedException`, or `IllegalArgumentException` and let it map. Never build an error
+body in a controller. Never let a stack trace reach the client.
 
 ### Validation at the boundary
 
-Bean Validation on the request record. Rules it cannot express (an end date before a start
-date) are checked in the service with a readable message.
-
-There is **no database constraint behind any of it any more** — Firestore has no CHECK, no
-NOT NULL, no UNIQUE. The service layer is the only thing standing between a bad payload and
-a stored document, so a validation gap here is a data-corruption bug, not a UX one.
+Bean Validation on the request record. Business rules that a constraint cannot express
+(an end date before a start date) are checked in the service with a readable message,
+*and* backed by a database constraint. Not in between.
 
 ---
 
 ## 4. Images
 
 Uploads go **browser → Cloudinary**, signed by `POST /api/v1/media/signature`. The bytes
-never pass through this service — a free-tier container has neither the memory to buffer
-them nor a disk that survives a redeploy.
+never pass through the API.
 
 - The API secret never reaches the browser.
-- The resize is inside the *signed* transformation, so a client cannot skip it.
-- Deleting a record deletes its image; replacing one releases the old asset. **A new image
-  field means wiring both paths**, or orphaned assets accumulate where nobody will find them.
+- The resize is inside the signed transformation, so a client cannot skip it.
+- Deleting a record deletes its image (`MediaService.deleteQuietly`). Replacing an image
+  releases the old one. **A new image field means wiring both paths** — otherwise orphaned
+  assets accumulate where nobody will ever find them.
 - `deleteQuietly` logs rather than throws, on purpose: a failed remote cleanup must not
   fail the admin's delete.
 
 ---
 
-## 5. Time
+## 5. Documentation is part of the change
 
-Inject the `Clock` bean; never call `LocalDate.now()` inline. It is fixed to
-`Asia/Kolkata` because the container runs in UTC and "is this event still upcoming?" must
-flip at midnight in Kolhapur. Injecting it is also what lets tests pin a date instead of
-depending on when the suite runs.
+- `docs/architecture.md` — what moved from the HTML file, the data model, the request flow
+- `docs/deployment.md` — Pages + Render, and every environment variable
+- `docs/ui-system.md` — the token table and the component inventory
+
+**Read the relevant doc before touching an area. Update it in the same change that makes
+it stale.** A change to the API contract that leaves `docs/architecture.md` describing the
+old shape is not done.
 
 ---
 
 ## 6. Working agreement
 
-- **Surgical changes only.** No drive-by refactors, no speculative abstractions.
-- **Comments explain *why*, never *what*.** Every comment here records a decision, a
-  constraint, or the bug the obvious alternative would cause — several record what the
-  original single-file site got wrong. Match that bar.
-- **No speculative error handling.** Validate at real boundaries — request bodies,
+- **Surgical changes only.** Touch what the task requires. No drive-by refactors, no
+  speculative abstractions.
+- **Comments explain *why*, never *what*.** The code already says what it does. Every
+  comment in this codebase earns its place by recording a decision, a constraint, or a bug
+  that the obvious alternative would cause — several record what the original single-file
+  site got wrong. Match that bar.
+- **No speculative error handling.** Validate at real boundaries — user input, the API,
   Cloudinary. Not in between.
-- **Verify before claiming done.** If you cannot run something, say so plainly.
+- **Verify before claiming done.** If you cannot run something, say so plainly instead of
+  implying success.
 
 ---
 
 ## 7. Definition of done
 
-- [ ] `mvn verify` passes (needs the Firestore emulator running)
-- [ ] New/renamed document fields are handled in the repository mapper AND the seeder
-- [ ] Anything derived is written on save, never scheduled
+**Frontend**
+- [ ] `npm run typecheck`, `npm run lint`, `npm test`, `npm run build` all pass
+- [ ] Only design tokens; zero arbitrary colour values
+- [ ] `"use client"` only where genuinely needed, at the leaf
+- [ ] Loading, error and empty states all handled
+- [ ] Semantic HTML; single `h1`; keyboard-operable
+
+**Backend**
+- [ ] `mvn verify` passes — needs BOTH emulators:
+      `npx firebase-tools emulators:start --only firestore,auth` (from `be/`)
+- [ ] Deleting a record deletes what referenced it — Firestore has no cascade
 - [ ] New endpoints have a case in `SecurityRulesIntegrationTest`
 - [ ] DTOs in, DTOs out — no entity crosses the controller boundary
 - [ ] New config is in `.env.example` **and** `docs/deployment.md`
+
+**Both**
 - [ ] Affected `docs/` updated in the same change
-- [ ] No secret committed, and no default added for `JWT_SECRET`
+- [ ] No secret added to `fe/`, and none committed anywhere
