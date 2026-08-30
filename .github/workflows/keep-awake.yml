@@ -1,0 +1,56 @@
+name: Keep the API awake
+
+# Render's free tier stops a service after 15 minutes without a request, and a cold start
+# measured ~43 seconds. That is not a failure — but it is indistinguishable from one to
+# the first visitor of the day, who waits three-quarters of a minute in front of a page of
+# empty skeletons.
+#
+# A request every 10 minutes keeps the instance up during the hours anyone is looking. It
+# does not run overnight IST: pinging around the clock would burn most of the free tier's
+# monthly instance hours to serve nobody, and the site is for a college.
+#
+# This is a mitigation, not a fix. The fix is a paid instance. The frontend still handles
+# a cold start correctly on its own (a 75s timeout and a "waking the server" notice), so
+# if this workflow is disabled or throttled the site degrades to slow, not broken.
+
+on:
+  schedule:
+    # Every 10 minutes, 03:00–17:00 UTC = 08:30–22:30 IST.
+    - cron: "*/10 3-17 * * *"
+  workflow_dispatch:
+
+# The default GITHUB_TOKEN would be granted write access to the whole repository for a job
+# that only makes an outbound HTTP call.
+permissions: {}
+
+concurrency:
+  group: keep-awake
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping the health endpoint
+        env:
+          # A repository variable so a rename or a move needs no code change. Unset means
+          # the step reports and exits cleanly rather than failing a scheduled run forever.
+          API_URL: ${{ vars.API_BASE_URL }}
+        run: |
+          if [ -z "$API_URL" ]; then
+            echo "::notice title=Not configured::Set the API_BASE_URL repository variable to enable this."
+            exit 0
+          fi
+
+          # --max-time comfortably exceeds a cold start: the whole point is to WAIT for the
+          # instance to come up, since that is what takes the wait off a real visitor.
+          START=$(date +%s)
+          CODE=$(curl -sS -o /dev/null -w '%{http_code}' --max-time 90 "$API_URL/actuator/health" || echo "000")
+          echo "health responded $CODE in $(( $(date +%s) - START ))s"
+
+          # Never fail the run. A red cron every ten minutes trains everyone to ignore the
+          # Actions tab, which costs more than this workflow is worth. The site handles a
+          # cold start on its own regardless.
+          if [ "$CODE" != "200" ]; then
+            echo "::warning title=API did not answer::Health check returned $CODE. The site still works; the first visitor will just wait for the cold start."
+          fi
