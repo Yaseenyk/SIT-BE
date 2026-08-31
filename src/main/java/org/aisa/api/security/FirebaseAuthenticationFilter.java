@@ -96,7 +96,7 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
                     token.getName() != null && !token.getName().isBlank()
                             ? token.getName()
                             : profile.map(AppUser::getName).orElse(null),
-                    token.isEmailVerified(),
+                    isEmailVerified(token),
                     profile.orElse(null));
 
             var authentication = new UsernamePasswordAuthenticationToken(
@@ -106,6 +106,40 @@ public class FirebaseAuthenticationFilter extends OncePerRequestFilter {
         });
 
         chain.doFilter(request, response);
+    }
+
+    /**
+     * Whether the address really is confirmed — not merely whether this token says so.
+     *
+     * <p>The claim inside the token is a SNAPSHOT from when it was issued, and confirming
+     * an address happens somewhere else entirely: in a mail client, often on another
+     * device. The browser's token keeps saying {@code false} until it is refreshed, which
+     * can be the best part of an hour later.
+     *
+     * <p>That made the most important flow on the site unrecoverable. A student clicked the
+     * link in their email, came back, and every action still returned 403 — with the client
+     * showing them as verified, because the client HAD re-read the user record. Forcing a
+     * token refresh from the browser is the documented fix and it is what the client does,
+     * but a client that fails to do it must not leave an account stuck: whether someone may
+     * act is this server's decision, so this server checks.
+     *
+     * <p>The extra call happens only when the token claims NOT verified, so it costs
+     * nothing for the overwhelming majority of requests and stops entirely as soon as the
+     * token catches up.
+     */
+    private boolean isEmailVerified(FirebaseToken token) {
+        if (token.isEmailVerified()) {
+            return true;
+        }
+        try {
+            return firebaseAuth.getUser(token.getUid()).isEmailVerified();
+        } catch (FirebaseAuthException ex) {
+            // Trust the token rather than failing the request: the worst case is that a
+            // just-verified account waits for its next token refresh, which is where this
+            // started, and not an outage.
+            log.debug("Could not re-check verification for {}: {}", token.getUid(), ex.getMessage());
+            return false;
+        }
     }
 
     private static String authorityFor(AuthenticatedUser user) {

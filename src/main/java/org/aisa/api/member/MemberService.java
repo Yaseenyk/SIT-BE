@@ -9,6 +9,7 @@ import org.aisa.api.committee.CommitteeRepository;
 import org.aisa.api.common.NotFoundException;
 import org.aisa.api.media.MediaService;
 import org.aisa.api.member.MemberDtos.MemberRequest;
+import org.aisa.api.member.MemberDtos.AdminMemberResponse;
 import org.aisa.api.member.MemberDtos.MemberResponse;
 import org.springframework.stereotype.Service;
 
@@ -101,6 +102,7 @@ public class MemberService {
         member.setLinkedinUrl(blankToNull(request.linkedinUrl()));
         member.setGithubUrl(blankToNull(request.githubUrl()));
         member.setEmail(blankToNull(request.email()));
+        member.setPhone(blankToNull(request.phone()));
         member.setPhotoUrl(blankToNull(request.photoUrl()));
         member.setPhotoPublicId(blankToNull(request.photoPublicId()));
     }
@@ -125,7 +127,38 @@ public class MemberService {
                 m.getAcademicYear(),
                 m.getLinkedinUrl(),
                 m.getGithubUrl(),
+                m.getPhotoUrl(),
+                m.getDisplayOrder());
+    }
+
+    /**
+     * Every member with their contact details, for the dashboard only.
+     *
+     * <p>Separate from {@link #findAll} rather than a flag on it. A boolean parameter that
+     * decides whether personal data is included is one wrong call site away from leaking
+     * it, and the call site is not where that decision belongs — the route is, and the
+     * route is what SecurityConfig guards.
+     */
+    public List<AdminMemberResponse> findAllForAdmin() {
+        Map<String, String> names = committeeNames();
+        return members.findAllOrdered().stream()
+                .map(member -> toAdminResponse(member, names))
+                .toList();
+    }
+
+    private static AdminMemberResponse toAdminResponse(Member m, Map<String, String> committeeNames) {
+        String committeeId = m.getCommitteeId();
+        return new AdminMemberResponse(
+                m.getId(),
+                m.getName(),
+                m.getRole(),
+                committeeId,
+                committeeId == null ? null : committeeNames.get(committeeId),
+                m.getAcademicYear(),
+                m.getLinkedinUrl(),
+                m.getGithubUrl(),
                 m.getEmail(),
+                m.getPhone(),
                 m.getPhotoUrl(),
                 m.getDisplayOrder());
     }

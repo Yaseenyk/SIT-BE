@@ -10,6 +10,14 @@ public final class MemberDtos {
     private MemberDtos() {
     }
 
+    /**
+     * What a visitor sees. Carries NO contact details, deliberately.
+     *
+     * <p>`email` used to be here and it was a latent leak waiting for the first roster
+     * import: every member on this site comes from an internal record of students'
+     * personal mail addresses and mobile numbers, and this endpoint is public. The roster
+     * is public information; how to phone a nineteen-year-old is not.
+     */
     public record MemberResponse(
             UUID id,
             String name,
@@ -20,7 +28,21 @@ public final class MemberDtos {
             String academicYear,
             String linkedinUrl,
             String githubUrl,
+            String photoUrl,
+            int order) {}
+
+    /** The same member, with the contact columns, behind the admin rule. */
+    public record AdminMemberResponse(
+            UUID id,
+            String name,
+            String role,
+            String committeeId,
+            String committeeName,
+            String academicYear,
+            String linkedinUrl,
+            String githubUrl,
             String email,
+            String phone,
             String photoUrl,
             int order) {}
 
@@ -49,6 +71,14 @@ public final class MemberDtos {
             @Email(message = "That does not look like an email address")
             @Size(max = 255)
             String email,
+
+            /*
+             * Free text rather than a pattern. Indian mobile numbers arrive as
+             * "9699363851", "+91 96993 63851" and every spacing in between; a regex here
+             * would reject a correct number typed a different way, and the field is only
+             * ever read by a person.
+             */
+            @Size(max = 32) String phone,
 
             String photoUrl,
             String photoPublicId) {}

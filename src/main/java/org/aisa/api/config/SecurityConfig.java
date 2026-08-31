@@ -103,6 +103,19 @@ public class SecurityConfig {
                          * No trailing wildcard on settings and stats: their `/admin`
                          * variants must fall through to the rule at the bottom.
                          */
+                        /*
+                         * BEFORE the public list below, and that ordering is the whole
+                         * point: `/api/v1/members/*` is permitAll, and `/members/admin`
+                         * matches it. Without this line the admin roster — every
+                         * volunteer's personal mobile number and mail address — would be
+                         * served to anonymous callers by a rule written for `/members/{id}`.
+                         *
+                         * This is the same shape as the bug that once published the staff
+                         * notification address through a blanket `GET /api/v1/**`. Spring
+                         * Security takes the FIRST match, so a deny placed first wins.
+                         */
+                        .requestMatchers(HttpMethod.GET, "/api/v1/members/admin").hasRole("ADMIN")
+
                         .requestMatchers(HttpMethod.GET,
                                 "/api/v1/committees", "/api/v1/committees/*",
                                 "/api/v1/members", "/api/v1/members/*",
@@ -119,11 +132,20 @@ public class SecurityConfig {
                          * of those they are. Locking these behind ROLE_STUDENT would leave
                          * them with a 403 and no way to find out why.
                          *
+                         * `/auth/session` is here for the same reason and NOT with the
+                         * signed-in endpoints below, where it started. The frontend calls it
+                         * once on every load to find out who the caller is; behind
+                         * ROLE_STUDENT it answered an unverified account with 403, the
+                         * client read the failure as "no profile", and the app reported a
+                         * verified-address problem as an unregistered account — the one
+                         * state it could not then explain or recover from.
+                         *
                          * `authenticated()`, not permitAll — a valid Firebase token is
                          * still required, and UserService decides the rest.
                          */
                         .requestMatchers(HttpMethod.POST, "/api/v1/auth/register").authenticated()
                         .requestMatchers(HttpMethod.GET, "/api/v1/auth/me").authenticated()
+                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/session").authenticated()
 
                         /*
                          * Signed-in students. Every one of these acts on behalf of the
@@ -131,7 +153,6 @@ public class SecurityConfig {
                          * the request body, so there is no id here for anyone to tamper
                          * with — see CurrentUser.
                          */
-                        .requestMatchers(HttpMethod.POST, "/api/v1/auth/session").hasAnyRole(SIGNED_IN)
                         .requestMatchers(HttpMethod.PUT, "/api/v1/auth/profile").hasAnyRole(SIGNED_IN)
                         .requestMatchers("/api/v1/me/**").hasAnyRole(SIGNED_IN)
                         .requestMatchers(HttpMethod.POST, "/api/v1/events/*/registration").hasAnyRole(SIGNED_IN)

@@ -5,6 +5,7 @@ import io.swagger.v3.oas.annotations.tags.Tag;
 import jakarta.validation.Valid;
 import java.util.List;
 import java.util.UUID;
+import org.aisa.api.member.MemberDtos.AdminMemberResponse;
 import org.aisa.api.member.MemberDtos.MemberRequest;
 import org.aisa.api.member.MemberDtos.MemberResponse;
 import org.springframework.http.HttpStatus;
@@ -35,6 +36,16 @@ public class MemberController {
     @Operation(summary = "List members, optionally filtered to one committee")
     public List<MemberResponse> list(@RequestParam(required = false) String committeeId) {
         return service.findAll(committeeId);
+    }
+
+    /**
+     * The roster WITH contact details. Admin-only, by the rule on `/members/admin` in
+     * SecurityConfig — the public listing above deliberately carries neither.
+     */
+    @GetMapping("/admin")
+    @Operation(summary = "Every member including phone and email, for the dashboard")
+    public List<AdminMemberResponse> listForAdmin() {
+        return service.findAllForAdmin();
     }
 
     @GetMapping("/{id}")

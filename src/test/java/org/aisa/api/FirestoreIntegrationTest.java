@@ -101,6 +101,22 @@ public abstract class FirestoreIntegrationTest {
         users.save(student);
     }
 
+    /** A Firebase account whose address has deliberately NOT been confirmed. */
+    protected UserRecord ensureUnverifiedFirebaseUser(String email) throws FirebaseAuthException {
+        try {
+            return firebaseAuth.getUserByEmail(email);
+        } catch (FirebaseAuthException notFound) {
+            return firebaseAuth.createUser(new UserRecord.CreateRequest()
+                    .setEmail(email)
+                    .setPassword(PASSWORD)
+                    .setEmailVerified(false));
+        }
+    }
+
+    protected AppUser studentProfile(UserRecord record) {
+        return profileFor(record, UserRole.STUDENT);
+    }
+
     private AppUser profileFor(UserRecord record, UserRole role) {
         AppUser user = new AppUser(record.getUid(), record.getEmail(), role.name() + " Account");
         user.setRole(role);
@@ -108,9 +124,21 @@ public abstract class FirestoreIntegrationTest {
         return user;
     }
 
+    /**
+     * The account, with the password these tests sign in with — whatever state it was in.
+     *
+     * <p>An earlier version only created the account when it was missing, which quietly
+     * assumed the emulator contained nothing else. It does not: running the app locally
+     * against the same emulator creates `admin@bsiet.org` with the DEVELOPMENT password,
+     * and every authenticated test then failed on a sign-in refusal that named nothing
+     * useful. The fixture owns these two accounts, so it sets them rather than hoping.
+     */
     private UserRecord ensureFirebaseUser(String email) throws FirebaseAuthException {
         try {
-            return firebaseAuth.getUserByEmail(email);
+            UserRecord existing = firebaseAuth.getUserByEmail(email);
+            return firebaseAuth.updateUser(new UserRecord.UpdateRequest(existing.getUid())
+                    .setPassword(PASSWORD)
+                    .setEmailVerified(true));
         } catch (FirebaseAuthException notFound) {
             return firebaseAuth.createUser(new UserRecord.CreateRequest()
                     .setEmail(email)

@@ -132,6 +132,7 @@ public class MemberRepository {
         member.setLinkedinUrl(str(doc, "linkedinUrl"));
         member.setGithubUrl(str(doc, "githubUrl"));
         member.setEmail(str(doc, "email"));
+        member.setPhone(str(doc, "phone"));
         member.setPhotoUrl(str(doc, "photoUrl"));
         member.setPhotoPublicId(str(doc, "photoPublicId"));
         member.setDisplayOrder(intOr(doc, "displayOrder", 0));
@@ -149,6 +150,7 @@ public class MemberRepository {
         map.put("linkedinUrl", m.getLinkedinUrl());
         map.put("githubUrl", m.getGithubUrl());
         map.put("email", m.getEmail());
+        map.put("phone", m.getPhone());
         map.put("photoUrl", m.getPhotoUrl());
         map.put("photoPublicId", m.getPhotoPublicId());
         map.put("displayOrder", m.getDisplayOrder());

@@ -11,6 +11,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
+import com.google.firebase.auth.UserRecord;
 import org.springframework.http.ResponseEntity;
 
 /**
@@ -186,6 +187,95 @@ class SecurityRulesIntegrationTest extends FirestoreIntegrationTest {
                         new HttpEntity<>(bearer("not.a.real.token")), String.class)
                 .getStatusCode())
                 .isEqualTo(HttpStatus.UNAUTHORIZED);
+    }
+
+    /**
+     * An account that cannot act must still be able to find out why.
+     *
+     * <p>This is the regression test for a bug that made the verification flow
+     * unrecoverable. `/auth/session` sat behind ROLE_STUDENT, so an unverified account got
+     * 403; the frontend read that failure as "this caller has no profile" and showed the
+     * screen for an unregistered account — which offers no way to verify an address.
+     *
+     * <p>Both endpoints must therefore answer 200 to ANY caller holding a valid token,
+     * whatever state their account is in, because the answer is what names the state.
+     */
+    @Test
+    void anUnverifiedAccountCanStillReadItsOwnState() throws Exception {
+        String email = "unverified@bsiet.org";
+        UserRecord record = ensureUnverifiedFirebaseUser(email);
+        users.save(studentProfile(record));
+
+        HttpHeaders headers = bearer(idTokenFor(email));
+
+        for (String path : new String[]{"/api/v1/auth/me"}) {
+            ResponseEntity<String> response = rest.exchange(
+                    path, HttpMethod.GET, new HttpEntity<>(new HttpHeaders(headers)), String.class);
+            assertThat(response.getStatusCode())
+                    .as("GET %s must tell an unverified caller what is wrong", path)
+                    .isEqualTo(HttpStatus.OK);
+            assertThat(response.getBody()).contains("\"state\":\"UNVERIFIED\"");
+        }
+
+        assertThat(rest.exchange("/api/v1/auth/session", HttpMethod.POST,
+                        new HttpEntity<>(new HttpHeaders(headers)), String.class)
+                .getStatusCode())
+                .as("POST /auth/session is how the frontend learns the caller's state on load")
+                .isEqualTo(HttpStatus.OK);
+
+        // ...and it must still be refused everything that needs a usable account.
+        assertThat(rest.exchange("/api/v1/me/registrations", HttpMethod.GET,
+                        new HttpEntity<>(new HttpHeaders(headers)), String.class)
+                .getStatusCode())
+                .as("an unverified account must not be able to act")
+                .isEqualTo(HttpStatus.FORBIDDEN);
+    }
+
+    /**
+     * The public roster must never carry a contact detail.
+     *
+     * <p>Members are imported from an internal selection record of students' personal
+     * mobile numbers and mail addresses, and `GET /api/v1/members` is public and rendered
+     * on the front page. This asserts on a real VALUE rather than on a field name: Jackson
+     * omits nulls, so on an empty database an assertion about "phone" would pass while
+     * proving nothing. Writing the member first is what makes a leak detectable.
+     *
+     * <p>It also pins the routing trap. `/api/v1/members/*` is permitAll, and
+     * `/members/admin` matches that pattern — so without an explicit rule ordered before
+     * it, the admin roster is served to anyone.
+     */
+    @Test
+    void memberContactDetailsAreNeverPublic() {
+        HttpHeaders admin = adminAuth();
+        admin.setContentType(MediaType.APPLICATION_JSON);
+
+        String phone = "9699363851";
+        String email = "volunteer.contact@example.org";
+        assertThat(rest.exchange("/api/v1/members", HttpMethod.POST,
+                        new HttpEntity<>(Map.of(
+                                "name", "Contact Probe",
+                                "role", "Sports Volunteer",
+                                "email", email,
+                                "phone", phone), admin),
+                        String.class)
+                .getStatusCode())
+                .isEqualTo(HttpStatus.CREATED);
+
+        String publicBody = rest.getForObject("/api/v1/members", String.class);
+        assertThat(publicBody)
+                .as("the public roster must not publish a volunteer's mobile number")
+                .doesNotContain(phone);
+        assertThat(publicBody)
+                .as("the public roster must not publish a volunteer's email address")
+                .doesNotContain(email);
+
+        assertThat(rest.getForEntity("/api/v1/members/admin", String.class).getStatusCode())
+                .as("/members/admin matches the permitAll pattern /members/* — it must still be denied")
+                .isEqualTo(HttpStatus.UNAUTHORIZED);
+
+        String adminBody = rest.exchange("/api/v1/members/admin", HttpMethod.GET,
+                new HttpEntity<>(new HttpHeaders(admin)), String.class).getBody();
+        assertThat(adminBody).contains(phone).contains(email);
     }
 
     private String signIn() {

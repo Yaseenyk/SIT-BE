@@ -41,7 +41,18 @@ public class Member extends BaseEntity {
 
     private String githubUrl;
 
+    /**
+     * Contact details, and the reason there are two DTOs for this one entity.
+     *
+     * <p>These are students' personal mobile numbers and personal mail addresses, taken
+     * from an internal selection record. {@code GET /api/v1/members} is public and its
+     * output is rendered on the front page, so neither field may appear there — see
+     * {@code MemberDtos.MemberResponse}, which omits both, and {@code AdminMemberResponse},
+     * which is behind the admin rule.
+     */
     private String email;
+
+    private String phone;
 
     private String photoUrl;
 

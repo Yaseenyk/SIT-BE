@@ -41,8 +41,9 @@ class ReferentialIntegrityTest extends FirestoreIntegrationTest {
     }
 
     private static MemberRequest member(String name, String committeeId) {
+        // linkedin, github, email, phone, photoUrl, photoPublicId
         return new MemberRequest(name, "Member", committeeId, "3rd Year",
-                null, null, null, null, null);
+                null, null, null, null, null, null);
     }
 
     @Test
