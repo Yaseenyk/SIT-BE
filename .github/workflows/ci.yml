@@ -38,12 +38,16 @@ jobs:
       # FIRESTORE_EMULATOR_HOST as an absolute switch and reads no credentials when it is
       # set. There is therefore no Firebase service account in CI, and nothing here can
       # write to production data.
+      #
+      # No `env:` block. The emulator ports are pinned by the repository's firebase.json,
+      # and Surefire passes them to the forked test JVM (see pom.xml) — which is the only
+      # place FIREBASE_AUTH_EMULATOR_HOST can be set, because the Admin SDK reads it with
+      # System.getenv and no code inside a running JVM can write to that.
+      #
+      # This step used to set FIRESTORE_EMULATOR_HOST to 8080 here, which had been wrong
+      # since the port moved to 8085 and did nothing only because Surefire's value wins.
       - name: Test
         run: firebase emulators:exec --only firestore,auth --project aisa-local "mvn -B verify"
-        env:
-          FIRESTORE_EMULATOR_HOST: 127.0.0.1:8080
-          # The application refuses to start without a signing key, by design. This one is
-          # for CI only and grants nothing: it never leaves the runner.
 
       - name: Upload test reports
         # Reports matter most when the run failed, so this must not be skipped on failure.
@@ -74,17 +78,43 @@ jobs:
         with:
           node-version: 22
 
+      # The Firestore emulator is a JAVA process that the Firebase CLI shells out to, so
+      # this job needs a JDK even though it only builds a container. Without it the runner's
+      # default JDK is used and the CLI refuses outright: "firebase-tools no longer supports
+      # Java version before 21". That failure was invisible for a while behind an earlier
+      # one in the same step, and then looked like the container could not reach Firestore.
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "25"
+          distribution: temurin
+
       # Port 8085, not 8080: the container publishes the API on 8080, and having the
       # emulator claim the same port would fail the smoke test for the wrong reason.
       - name: Start the Firestore and Auth emulators
         run: |
           npm install -g firebase-tools
-          firebase emulators:start --only firestore,auth --project aisa-local \
-            --config <(echo '{"emulators":{"firestore":{"host":"127.0.0.1","port":8085},"auth":{"host":"127.0.0.1","port":9099},"ui":{"enabled":false}}}') &
+          # The repository's own firebase.json pins these ports, so there is no --config
+          # here. It used to pass one through process substitution, which firebase-tools
+          # cannot open: `Could not load config file /dev/fd/63`. The emulators never
+          # started, and the failure surfaced two steps later as the container being unable
+          # to reach Firestore — which reads like a container problem and is not one.
+          firebase emulators:start --only firestore,auth --project aisa-local &
+
           for _ in $(seq 1 40); do
-            curl -fsS http://127.0.0.1:8085/ >/dev/null 2>&1 && break
+            if curl -fsS http://127.0.0.1:8085/ >/dev/null 2>&1 && curl -fsS http://127.0.0.1:9099/ >/dev/null 2>&1; then
+              echo "Both emulators are up."
+              READY=1
+              break
+            fi
             sleep 3
           done
+
+          # Fail HERE if they never came up, naming the cause, rather than letting the next
+          # step report a connection refused it did nothing to deserve.
+          if [ -z "$READY" ]; then
+            echo "::error title=Emulators did not start::firestore:8085 and auth:9099 never became reachable."
+            exit 1
+          fi
 
       - name: Run the container and wait for it to serve
         run: |

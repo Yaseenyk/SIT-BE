@@ -278,6 +278,71 @@ class SecurityRulesIntegrationTest extends FirestoreIntegrationTest {
         assertThat(adminBody).contains(phone).contains(email);
     }
 
+    /**
+     * Uploading is admin-only; the bytes are public.
+     *
+     * <p>Both halves matter. If POST were public the site would be free image hosting for
+     * anyone who found the endpoint, and every upload lands in the same Firestore the rest
+     * of the data lives in. If GET were admin-only no gallery photo would render for a
+     * visitor, which is the entire point of storing one.
+     *
+     * <p>The payload is a real 1x1 JPEG: the service checks magic numbers, so a caller
+     * cannot label arbitrary bytes image/jpeg and have them served back with that type.
+     */
+    @Test
+    void imagesAreAdminToUploadAndPublicToRead() {
+        String jpegBase64 =
+                "/9j/4AAQSkZJRgABAQEAYABgAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0a"
+                + "HBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/wAALCAABAAEBAREA/8QAFAABAAAAAAAA"
+                + "AAAAAAAAAAAACf/EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAD8AKp//2Q==";
+
+        HttpHeaders anonymous = new HttpHeaders();
+        anonymous.setContentType(MediaType.APPLICATION_JSON);
+        assertThat(rest.exchange("/api/v1/images", HttpMethod.POST,
+                        new HttpEntity<>(Map.of("data", jpegBase64, "contentType", "image/jpeg",
+                                "folder", "gallery"), anonymous),
+                        String.class)
+                .getStatusCode())
+                .as("uploading must not be possible without an admin token")
+                .isEqualTo(HttpStatus.UNAUTHORIZED);
+
+        HttpHeaders admin = adminAuth();
+        admin.setContentType(MediaType.APPLICATION_JSON);
+        ResponseEntity<String> uploaded = rest.exchange("/api/v1/images", HttpMethod.POST,
+                new HttpEntity<>(Map.of("data", jpegBase64, "contentType", "image/jpeg",
+                        "folder", "gallery"), admin),
+                String.class);
+        assertThat(uploaded.getStatusCode()).isEqualTo(HttpStatus.OK);
+
+        String body = uploaded.getBody();
+        assertThat(body).isNotNull();
+        String id = body.split("\"id\":\"")[1].split("\"")[0];
+
+        ResponseEntity<byte[]> served = rest.getForEntity("/api/v1/images/" + id, byte[].class);
+        assertThat(served.getStatusCode())
+                .as("a gallery photo has to render for a visitor with no account")
+                .isEqualTo(HttpStatus.OK);
+        assertThat(served.getHeaders().getContentType()).hasToString("image/jpeg");
+        assertThat(served.getBody()).isNotEmpty();
+    }
+
+    /** An SVG is a document that can carry script, and this endpoint serves what it stores. */
+    @Test
+    void svgUploadsAreRefused() {
+        HttpHeaders admin = adminAuth();
+        admin.setContentType(MediaType.APPLICATION_JSON);
+        String svg = java.util.Base64.getEncoder().encodeToString(
+                "<svg xmlns=\"http://www.w3.org/2000/svg\"><script>alert(1)</script></svg>"
+                        .getBytes(java.nio.charset.StandardCharsets.UTF_8));
+
+        assertThat(rest.exchange("/api/v1/images", HttpMethod.POST,
+                        new HttpEntity<>(Map.of("data", svg, "contentType", "image/svg+xml",
+                                "folder", "gallery"), admin),
+                        String.class)
+                .getStatusCode())
+                .isEqualTo(HttpStatus.BAD_REQUEST);
+    }
+
     private String signIn() {
         return idTokenFor(ADMIN_EMAIL);
     }

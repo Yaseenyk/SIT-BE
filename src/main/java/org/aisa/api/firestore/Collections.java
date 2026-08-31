@@ -36,6 +36,15 @@ public final class Collections {
 
     public static final String COMMITTEE_APPLICATIONS = "committeeApplications";
 
+    /**
+     * Uploaded image bytes, one document each.
+     *
+     * <p>Separate from the records that reference them on purpose: a 700 KB field on a
+     * gallery or member document would be pulled into memory by every listing query, which
+     * is exactly the problem the original site had.
+     */
+    public static final String IMAGES = "images";
+
     /** The settings singleton. One document, as the public site always needs all of it. */
     public static final String SETTINGS_DOC = "site";
 }

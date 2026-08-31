@@ -126,6 +126,14 @@ public class SecurityConfig {
                                 "/api/v1/stats").permitAll()
 
                         /*
+                         * Image bytes are public because everything that references
+                         * them is: a gallery photo, an event banner, a member's
+                         * portrait. Only the GET — POST /images falls through to the
+                         * admin rule at the bottom, so uploading stays admin-only.
+                         */
+                        .requestMatchers(HttpMethod.GET, "/api/v1/images/*").permitAll()
+
+                        /*
                          * Registration and /auth/me are the only endpoints reachable by an
                          * account that is not yet usable, and they have to be: a caller who
                          * is unregistered, unverified or suspended needs to be TOLD which
