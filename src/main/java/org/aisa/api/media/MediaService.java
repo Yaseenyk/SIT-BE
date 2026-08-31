@@ -30,8 +30,10 @@ public class MediaService {
 
     private final AisaProperties.Cloudinary config;
     private final Cloudinary cloudinary;
+    private final org.aisa.api.image.ImageService images;
 
-    public MediaService(AisaProperties properties) {
+    public MediaService(AisaProperties properties, org.aisa.api.image.ImageService images) {
+        this.images = images;
         this.config = properties.cloudinary();
         this.cloudinary = config.isConfigured()
                 ? new Cloudinary(ObjectUtils.asMap(
@@ -90,8 +92,24 @@ public class MediaService {
      * them staring at an error over a row that is already gone; an orphaned image is the
      * cheaper outcome, and it is logged so it can be swept later.
      */
+    /**
+     * Releases the asset behind a handle, whichever store holds it.
+     *
+     * <p>There are two now: images uploaded to Firestore (the default, since Cloud Storage
+     * is not enabled on this project and Cloudinary needs an account) and Cloudinary assets
+     * from before. Callers hold a `publicId` and should not have to know which — thirteen
+     * call sites across seven services would each need the same two-line decision, and the
+     * one that got missed would leak an image nobody could find.
+     *
+     * <p>Deleting a Firestore document that does not exist is a no-op, so trying both is
+     * safe rather than merely convenient.
+     */
     public void deleteQuietly(String publicId) {
-        if (publicId == null || publicId.isBlank() || cloudinary == null) {
+        if (publicId == null || publicId.isBlank()) {
+            return;
+        }
+        images.deleteQuietly(publicId);
+        if (cloudinary == null) {
             return;
         }
         try {
