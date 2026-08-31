@@ -78,6 +78,16 @@ jobs:
         with:
           node-version: 22
 
+      # The Firestore emulator is a JAVA process that the Firebase CLI shells out to, so
+      # this job needs a JDK even though it only builds a container. Without it the runner's
+      # default JDK is used and the CLI refuses outright: "firebase-tools no longer supports
+      # Java version before 21". That failure was invisible for a while behind an earlier
+      # one in the same step, and then looked like the container could not reach Firestore.
+      - uses: actions/setup-java@v4
+        with:
+          java-version: "25"
+          distribution: temurin
+
       # Port 8085, not 8080: the container publishes the API on 8080, and having the
       # emulator claim the same port would fail the smoke test for the wrong reason.
       - name: Start the Firestore and Auth emulators
